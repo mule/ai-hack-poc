@@ -1,0 +1,7 @@
+{
+  "room_type": "gymnasium",
+  "tiles": [[1, 1, 1], [1, 0, 1]],
+  "danger": 9,
+  "enemy_density": "lots",
+  "exits": "north"
+}

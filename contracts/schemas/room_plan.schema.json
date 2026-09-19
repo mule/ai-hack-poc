@@ -1,0 +1,200 @@
+{
+  "$defs": {
+    "EnvironmentalTag": {
+      "enum": [
+        "dark",
+        "flooded",
+        "fungal",
+        "icy",
+        "hot",
+        "ruined",
+        "hallowed",
+        "trapped",
+        "overgrown",
+        "noisy"
+      ],
+      "title": "EnvironmentalTag",
+      "type": "string"
+    },
+    "Exit": {
+      "additionalProperties": false,
+      "properties": {
+        "direction": {
+          "$ref": "#/$defs/ExitDirection"
+        },
+        "kind": {
+          "$ref": "#/$defs/ExitKind",
+          "default": "door"
+        },
+        "locked": {
+          "default": false,
+          "title": "Locked",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "direction"
+      ],
+      "title": "Exit",
+      "type": "object"
+    },
+    "ExitDirection": {
+      "enum": [
+        "north",
+        "south",
+        "east",
+        "west",
+        "up",
+        "down"
+      ],
+      "title": "ExitDirection",
+      "type": "string"
+    },
+    "ExitKind": {
+      "enum": [
+        "door",
+        "passage",
+        "stairs",
+        "secret"
+      ],
+      "title": "ExitKind",
+      "type": "string"
+    },
+    "RoomSize": {
+      "description": "Relative size class; exact tile extents are decided game-side.",
+      "enum": [
+        "tiny",
+        "small",
+        "medium",
+        "large",
+        "huge"
+      ],
+      "title": "RoomSize",
+      "type": "string"
+    },
+    "RoomType": {
+      "description": "Semantic room archetypes. Never encodes geometry.",
+      "enum": [
+        "entrance",
+        "room",
+        "corridor",
+        "cavern",
+        "chamber",
+        "vault",
+        "shrine",
+        "shop",
+        "treasure",
+        "stairs_down",
+        "stairs_up"
+      ],
+      "title": "RoomType",
+      "type": "string"
+    }
+  },
+  "additionalProperties": false,
+  "description": "Semantic description of one room. Geometry is derived game-side.",
+  "properties": {
+    "room_id": {
+      "maxLength": 64,
+      "minLength": 1,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$",
+      "title": "Room Id",
+      "type": "string"
+    },
+    "depth": {
+      "maximum": 128,
+      "minimum": 1,
+      "title": "Depth",
+      "type": "integer"
+    },
+    "room_type": {
+      "$ref": "#/$defs/RoomType"
+    },
+    "size": {
+      "$ref": "#/$defs/RoomSize"
+    },
+    "danger": {
+      "default": 1,
+      "maximum": 5,
+      "minimum": 1,
+      "title": "Danger",
+      "type": "integer"
+    },
+    "exits": {
+      "default": [],
+      "items": {
+        "$ref": "#/$defs/Exit"
+      },
+      "maxItems": 8,
+      "title": "Exits",
+      "type": "array"
+    },
+    "enemy_density": {
+      "default": 0.0,
+      "maximum": 1.0,
+      "minimum": 0.0,
+      "title": "Enemy Density",
+      "type": "number"
+    },
+    "loot_density": {
+      "default": 0.0,
+      "maximum": 1.0,
+      "minimum": 0.0,
+      "title": "Loot Density",
+      "type": "number"
+    },
+    "secret_probability": {
+      "default": 0.0,
+      "maximum": 1.0,
+      "minimum": 0.0,
+      "title": "Secret Probability",
+      "type": "number"
+    },
+    "has_secret": {
+      "anyOf": [
+        {
+          "type": "boolean"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Has Secret"
+    },
+    "environmental_tags": {
+      "default": [],
+      "items": {
+        "$ref": "#/$defs/EnvironmentalTag"
+      },
+      "maxItems": 8,
+      "title": "Environmental Tags",
+      "type": "array"
+    },
+    "description": {
+      "anyOf": [
+        {
+          "maxLength": 200,
+          "minLength": 1,
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Description"
+    }
+  },
+  "required": [
+    "room_id",
+    "depth",
+    "room_type",
+    "size"
+  ],
+  "title": "RoomPlan",
+  "type": "object",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://mule.github.io/ai-hack-poc/contracts/v1.0.0/room_plan.schema.json",
+  "x-contract-version": "1.0.0"
+}

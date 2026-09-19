@@ -1,0 +1,191 @@
+name: CI
+
+"on":
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+jobs:
+  backend-checks:
+    name: Backend Lint and Tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+          cache: "pip"
+          cache-dependency-path: "director/pyproject.toml"
+
+      - name: Setup environment and run checks
+        run: |
+          make setup && make check
+
+  godot-checks:
+    name: Godot Headless Checks and Tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      GODOT_VERSION: "4.7.1-stable"
+      GODOT_BIN_SHA512: "4ccdab7a48eeccbe8819a2fc1f6262f8d72065d98601bcb3743fcbd7ebd39f373758a788ee3293a05ec5b2c48538266c437404312e372225cd2df273945a2de9"
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      - name: Cache Godot binary
+        id: cache-godot
+        uses: actions/cache@v4
+        with:
+          path: ~/.local/bin/godot
+          key: godot-bin-${{ env.GODOT_VERSION }}
+
+      - name: Install Godot Engine
+        if: steps.cache-godot.outputs.cache-hit != 'true'
+        run: |
+          mkdir -p ~/.local/bin /tmp/godot-download
+          curl -fsSL --retry 3 --retry-connrefused "https://github.com/godotengine/godot/releases/download/${GODOT_VERSION}/Godot_v${GODOT_VERSION}_linux.x86_64.zip" -o /tmp/godot-download/godot.zip
+          echo "${GODOT_BIN_SHA512}  /tmp/godot-download/godot.zip" | sha512sum -c -
+          unzip -q /tmp/godot-download/godot.zip -d /tmp/godot-download
+          mv /tmp/godot-download/Godot_v${GODOT_VERSION}_linux.x86_64 ~/.local/bin/godot
+          chmod +x ~/.local/bin/godot
+          rm -rf /tmp/godot-download
+
+      - name: Add Godot to PATH
+        run: echo "$HOME/.local/bin" >> $GITHUB_PATH
+
+      - name: Godot project load check
+        run: |
+          make godot-check GODOT="$HOME/.local/bin/godot"
+
+      - name: Godot test suites
+        run: |
+          make godot-test GODOT="$HOME/.local/bin/godot"
+
+  build-artifacts:
+    name: Build Desktop and Android Artifacts
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    needs: [backend-checks, godot-checks]
+    env:
+      GODOT_VERSION: "4.7.1-stable"
+      GODOT_DIR_VERSION: "4.7.1.stable"
+      GODOT_BIN_SHA512: "4ccdab7a48eeccbe8819a2fc1f6262f8d72065d98601bcb3743fcbd7ebd39f373758a788ee3293a05ec5b2c48538266c437404312e372225cd2df273945a2de9"
+      GODOT_TEMPLATES_SHA512: "afcc83d8d3d298038f19c58744a0d660fa75dd4baa33cb55d1011bb2565a2a8c2381728924564cb909e37c205a23f21b521b23bd057993afd43ae4da0b2f9d47"
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      - name: Set up Java 17
+        uses: actions/setup-java@v6
+        with:
+          distribution: "temurin"
+          java-version: "17"
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@be39fa834029ff78f1a44aa3bb0819b8fc2bd8fd # v4.0.4
+
+      - name: Install Android build tools and platform
+        run: |
+          yes | sdkmanager --licenses >/dev/null 2>&1 || true
+          sdkmanager "platforms;android-35" "build-tools;35.0.0" "platform-tools"
+
+      - name: Cache Godot binary
+        id: cache-godot
+        uses: actions/cache@v4
+        with:
+          path: ~/.local/bin/godot
+          key: godot-bin-${{ env.GODOT_VERSION }}
+
+      - name: Install Godot Engine
+        if: steps.cache-godot.outputs.cache-hit != 'true'
+        run: |
+          mkdir -p ~/.local/bin /tmp/godot-download
+          curl -fsSL --retry 3 --retry-connrefused "https://github.com/godotengine/godot/releases/download/${GODOT_VERSION}/Godot_v${GODOT_VERSION}_linux.x86_64.zip" -o /tmp/godot-download/godot.zip
+          echo "${GODOT_BIN_SHA512}  /tmp/godot-download/godot.zip" | sha512sum -c -
+          unzip -q /tmp/godot-download/godot.zip -d /tmp/godot-download
+          mv /tmp/godot-download/Godot_v${GODOT_VERSION}_linux.x86_64 ~/.local/bin/godot
+          chmod +x ~/.local/bin/godot
+          rm -rf /tmp/godot-download
+
+      - name: Add Godot to PATH
+        run: echo "$HOME/.local/bin" >> $GITHUB_PATH
+
+      - name: Cache Godot export templates
+        id: cache-templates
+        uses: actions/cache@v4
+        with:
+          path: ~/.local/share/godot/export_templates
+          key: godot-templates-${{ env.GODOT_VERSION }}
+
+      - name: Install Godot export templates
+        if: steps.cache-templates.outputs.cache-hit != 'true'
+        run: |
+          mkdir -p /tmp/godot-tpz ~/.local/share/godot/export_templates/${GODOT_DIR_VERSION}
+          curl -fsSL --retry 3 --retry-connrefused "https://github.com/godotengine/godot/releases/download/${GODOT_VERSION}/Godot_v${GODOT_VERSION}_export_templates.tpz" -o /tmp/godot-tpz/templates.tpz
+          echo "${GODOT_TEMPLATES_SHA512}  /tmp/godot-tpz/templates.tpz" | sha512sum -c -
+          unzip -q /tmp/godot-tpz/templates.tpz -d /tmp/godot-tpz
+          mv /tmp/godot-tpz/templates/* ~/.local/share/godot/export_templates/${GODOT_DIR_VERSION}/
+          rm -rf /tmp/godot-tpz
+
+      - name: Generate debug keystore
+        run: |
+          mkdir -p ~/.local/share/godot/keystores
+          keytool -genkeypair -v -keystore ~/.local/share/godot/keystores/debug.keystore \
+            -alias androiddebugkey -keyalg RSA -keysize 2048 -validity 10000 \
+            -dname "CN=Android Debug,O=Android,C=US" -storepass android -keypass android
+
+      - name: Configure Godot Android SDK paths
+        run: |
+          mkdir -p ~/.config/godot
+          cat <<EOF > ~/.config/godot/editor_settings-4.7.tres
+          [gd_resource type="EditorSettings" format=3]
+
+          [resource]
+          export/android/android_sdk_path = "$ANDROID_HOME"
+          export/android/java_sdk_path = "$JAVA_HOME"
+          EOF
+
+      - name: Export Linux desktop package
+        run: |
+          make export-linux GODOT="$HOME/.local/bin/godot"
+
+      - name: Export Android debug APK
+        run: |
+          GODOT_ANDROID_KEYSTORE_DEBUG_PATH="$HOME/.local/share/godot/keystores/debug.keystore" \
+          GODOT_ANDROID_KEYSTORE_DEBUG_USER="androiddebugkey" \
+          GODOT_ANDROID_KEYSTORE_DEBUG_PASSWORD="android" \
+          make export-android GODOT="$HOME/.local/bin/godot"
+
+      - name: Verify Android networking permission
+        run: |
+          "$ANDROID_HOME/build-tools/35.0.0/aapt" dump permissions game/builds/android/ai-hack-poc-debug.apk \
+            | tee /tmp/android-permissions.txt
+          grep -Fq "uses-permission: name='android.permission.INTERNET'" /tmp/android-permissions.txt
+
+      - name: Upload Linux desktop artifact
+        if: github.ref == 'refs/heads/main' || github.event_name == 'workflow_dispatch'
+        uses: actions/upload-artifact@v6
+        with:
+          name: linux-desktop-build
+          path: game/builds/linux/ai-hack-poc-linux-x86_64.tar.gz
+          if-no-files-found: error
+
+      - name: Upload Android debug artifact
+        if: github.ref == 'refs/heads/main' || github.event_name == 'workflow_dispatch'
+        uses: actions/upload-artifact@v6
+        with:
+          name: android-debug-apk
+          path: game/builds/android/ai-hack-poc-debug.apk
+          if-no-files-found: error

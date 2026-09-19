@@ -1,0 +1,237 @@
+{
+  "overall": {
+    "danger": {
+      "histogram": {
+        "1": 12
+      },
+      "max": 1,
+      "mean": 1.0,
+      "mean_slope": 0.0,
+      "min": 1
+    },
+    "failures": {
+      "by_kind": {
+        "placement_conflict": 9
+      },
+      "error": 0,
+      "info": 8,
+      "warning": 1
+    },
+    "fallback_frequency": 0.5,
+    "fallback_reasons": {
+      "invalid_response": 1,
+      "plan_rejected": 1,
+      "provider_failure": 1,
+      "response_mismatch": 1,
+      "timeout": 2
+    },
+    "passed": true,
+    "repetition": {
+      "max_consecutive_same_type": 6,
+      "mean_signature_repeat_rate": 0.0833
+    },
+    "resources": {
+      "enemies": {
+        "by_type": {
+          "goblin": 25
+        },
+        "total": 25
+      },
+      "enemies_per_room_histogram": {
+        "0": 1,
+        "1": 3,
+        "2": 6,
+        "5": 2
+      },
+      "items": {
+        "by_type": {
+          "potion_health": 26,
+          "sword_upgrade": 11
+        },
+        "total": 37
+      },
+      "items_per_room_histogram": {
+        "1": 3,
+        "3": 6,
+        "4": 1,
+        "6": 2
+      },
+      "per_room": {
+        "enemies": {
+          "max": 5,
+          "mean": 2.0833,
+          "min": 0,
+          "stdev": 1.441
+        },
+        "items": {
+          "max": 6,
+          "mean": 3.0833,
+          "min": 1,
+          "stdev": 1.6051
+        }
+      },
+      "rooms_without_enemies": 1,
+      "rooms_without_items": 0
+    },
+    "rooms_committed": 12,
+    "rooms_explored": 12,
+    "runs": 1,
+    "sealed_exits": 1,
+    "sources": {
+      "director": 6,
+      "fallback": 5,
+      "start": 1
+    },
+    "steps": 12,
+    "truncated": null
+  },
+  "runs": [
+    {
+      "breaches": 0,
+      "counters": {
+        "breaches": 0,
+        "committed_director": 6,
+        "committed_fallback": 5,
+        "duplicates": 1,
+        "fallbacks": 6,
+        "rejected": 8,
+        "sealed": 1,
+        "stale": 0
+      },
+      "danger": {
+        "by_bucket": [
+          {
+            "from": 0,
+            "mean": 1.0,
+            "rooms": 10,
+            "to": 9
+          },
+          {
+            "from": 10,
+            "mean": 1.0,
+            "rooms": 2,
+            "to": 11
+          }
+        ],
+        "first_third_mean": 1.0,
+        "histogram": {
+          "1": 12
+        },
+        "last_third_mean": 1.0,
+        "max": 1,
+        "mean": 1.0,
+        "min": 1,
+        "slope": 0.0
+      },
+      "failures": {
+        "by_kind": {
+          "placement_conflict": 9
+        },
+        "error": 0,
+        "info": 8,
+        "warning": 1
+      },
+      "fallback_frequency": 0.5,
+      "fallback_reasons": {
+        "invalid_response": 1,
+        "plan_rejected": 1,
+        "provider_failure": 1,
+        "response_mismatch": 1,
+        "timeout": 2
+      },
+      "open_frontiers_end": 6,
+      "passed": true,
+      "pending_end": 0,
+      "repetition": {
+        "consecutive_signature_repeat_rate": 0.0,
+        "max_consecutive_same_type": 6,
+        "signature_repeat_rate": 0.0833,
+        "size_histogram": {
+          "13x11": 2,
+          "7x7": 2,
+          "9x9": 8
+        },
+        "type_histogram": {
+          "chamber": 1,
+          "corridor": 2,
+          "entrance": 1,
+          "room": 8
+        },
+        "unique_signatures": 11
+      },
+      "resources": {
+        "enemies": {
+          "by_type": {
+            "goblin": 25
+          },
+          "total": 25
+        },
+        "enemies_per_room_histogram": {
+          "0": 1,
+          "1": 3,
+          "2": 6,
+          "5": 2
+        },
+        "items": {
+          "by_type": {
+            "potion_health": 26,
+            "sword_upgrade": 11
+          },
+          "total": 37
+        },
+        "items_per_room_histogram": {
+          "1": 3,
+          "3": 6,
+          "4": 1,
+          "6": 2
+        },
+        "per_room": {
+          "enemies": {
+            "max": 5,
+            "mean": 2.0833,
+            "min": 0,
+            "stdev": 1.441
+          },
+          "items": {
+            "max": 6,
+            "mean": 3.0833,
+            "min": 1,
+            "stdev": 1.6051
+          }
+        },
+        "rooms_without_enemies": 1,
+        "rooms_without_items": 0
+      },
+      "rooms_committed": 12,
+      "rooms_explored": 12,
+      "run": 0,
+      "run_id": "sim-7",
+      "sealed_exits": 1,
+      "seed": 7,
+      "sources": {
+        "director": 6,
+        "fallback": 5,
+        "start": 1
+      },
+      "status": "completed",
+      "steps": 12
+    }
+  ],
+  "telemetry": {
+    "error_kinds": {},
+    "estimated_cost_usd": null,
+    "http_statuses": {
+      "200": 9,
+      "503": 1
+    },
+    "latency_ms": null,
+    "reported_models": {
+      "builtin-v1": 9
+    },
+    "reported_providers": {
+      "rules-baseline": 9
+    },
+    "requests_refused": 0,
+    "requests_submitted": 12
+  }
+}

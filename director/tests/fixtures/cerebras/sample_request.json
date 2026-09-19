@@ -1,0 +1,157 @@
+{
+  "model": "qwen-3.8-27b",
+  "messages": [
+    {
+      "role": "system",
+      "content": "You are the dungeon director for a roguelike game. Generate a single semantic RoomPlan for the unexplored exit connecting back to the frontier. Return strictly valid JSON matching the requested schema."
+    },
+    {
+      "role": "user",
+      "content": "Generate the room behind exit north of room r-003 at depth 3. You MUST include an exit with direction='south', kind='door', locked=false connecting back to the player.\nContext: {\"task\":\"generate_room\",\"depth\":3,\"turn\":148,\"player\":{\"hp\":22,\"max_hp\":30,\"level\":4,\"conditions\":[\"poisoned\"]},\"target_exit_frontier\":{\"from_room\":\"r-003\",\"exit_direction\":\"north\",\"required_backlink\":{\"direction\":\"south\",\"kind\":\"door\",\"locked\":false}},\"options\":{\"max_danger\":3,\"forbidden_room_types\":[\"vault\"],\"allow_secrets\":true,\"target_enemy_density\":0.2,\"target_loot_density\":0.4},\"prompt_hint\":\"Player is cautious and low on HP; prefer a safer room with a chance of food.\"}"
+    }
+  ],
+  "response_format": {
+    "type": "json_schema",
+    "json_schema": {
+      "name": "room_plan",
+      "strict": true,
+      "schema": {
+        "type": "object",
+        "properties": {
+          "room_id": {
+            "type": "string",
+            "description": "Identifier for the room, e.g. room-1"
+          },
+          "depth": {
+            "type": "integer",
+            "description": "Dungeon depth matching state.depth"
+          },
+          "room_type": {
+            "type": "string",
+            "enum": [
+              "entrance",
+              "room",
+              "corridor",
+              "cavern",
+              "chamber",
+              "vault",
+              "shrine",
+              "shop",
+              "treasure",
+              "stairs_down",
+              "stairs_up"
+            ]
+          },
+          "size": {
+            "type": "string",
+            "enum": [
+              "tiny",
+              "small",
+              "medium",
+              "large",
+              "huge"
+            ]
+          },
+          "danger": {
+            "type": "integer",
+            "description": "Danger level from 1 to 5"
+          },
+          "enemy_density": {
+            "type": "number",
+            "description": "Enemy density between 0.0 and 1.0"
+          },
+          "loot_density": {
+            "type": "number",
+            "description": "Loot density between 0.0 and 1.0"
+          },
+          "secret_probability": {
+            "type": "number",
+            "description": "Secret probability between 0.0 and 1.0"
+          },
+          "has_secret": {
+            "type": "boolean",
+            "description": "True if room contains a secret (requires secret_probability > 0)"
+          },
+          "exits": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "direction": {
+                  "type": "string",
+                  "enum": [
+                    "north",
+                    "south",
+                    "east",
+                    "west",
+                    "up",
+                    "down"
+                  ]
+                },
+                "kind": {
+                  "type": "string",
+                  "enum": [
+                    "door",
+                    "passage",
+                    "stairs",
+                    "secret"
+                  ]
+                },
+                "locked": {
+                  "type": "boolean"
+                }
+              },
+              "required": [
+                "direction",
+                "kind",
+                "locked"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "environmental_tags": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": [
+                "dark",
+                "flooded",
+                "fungal",
+                "icy",
+                "hot",
+                "ruined",
+                "hallowed",
+                "trapped",
+                "overgrown",
+                "noisy"
+              ]
+            }
+          },
+          "description": {
+            "type": "string",
+            "description": "Flavor text description, max 200 chars"
+          }
+        },
+        "required": [
+          "room_id",
+          "depth",
+          "room_type",
+          "size",
+          "danger",
+          "enemy_density",
+          "loot_density",
+          "secret_probability",
+          "has_secret",
+          "exits",
+          "environmental_tags",
+          "description"
+        ],
+        "additionalProperties": false
+      }
+    }
+  },
+  "reasoning_effort": "none",
+  "max_completion_tokens": 512,
+  "temperature": 0,
+  "seed": 1
+}

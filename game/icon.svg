@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512">
+  <rect width="512" height="512" rx="96" fill="#1b1d24"/>
+  <rect x="32" y="32" width="448" height="448" rx="72" fill="none" stroke="#2d3340" stroke-width="12"/>
+  <!-- Dungeon walls / map stylized icon -->
+  <path d="M128 128h256v256H128z" fill="#252936" stroke="#4a5568" stroke-width="16" stroke-linejoin="round"/>
+  <!-- Floor corridors -->
+  <path d="M224 128v100h-96v56h96v100h64V284h96v-56h-96V128z" fill="#3a4253"/>
+  <!-- Central room / Hero beacon -->
+  <circle cx="256" cy="256" r="32" fill="#e5ad42" stroke="#d9822b" stroke-width="8"/>
+  <!-- Dungeon stairs down marker -->
+  <path d="M320 320h48v48h-48z" fill="#63b3ed"/>
+</svg>

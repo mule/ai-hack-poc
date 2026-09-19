@@ -1,0 +1,159 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/mule/ai-hack-poc/benchmarks/simulation/schemas/room.schema.json",
+  "title": "Simulation room row",
+  "description": "One line of rooms.jsonl: one committed room.",
+  "x-dataset-schema-version": "1.0.0",
+  "type": "object",
+  "properties": {
+    "run": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "index": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "room_id": {
+      "type": "string"
+    },
+    "source": {
+      "enum": [
+        "start",
+        "director",
+        "fallback"
+      ]
+    },
+    "room_type": {
+      "type": "string"
+    },
+    "size": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "width": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "height": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "danger": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 5
+    },
+    "parent_frontier": {
+      "type": "string"
+    },
+    "distance_from_start": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "origin": {
+      "type": "array",
+      "items": {
+        "type": "integer"
+      },
+      "minItems": 2,
+      "maxItems": 2
+    },
+    "floor_tiles": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "exit_count": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "exits": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "enemy_count": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "item_count": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "enemies": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "integer",
+        "minimum": 0
+      },
+      "description": "enemy type -> count"
+    },
+    "items": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "integer",
+        "minimum": 0
+      },
+      "description": "item type -> count"
+    },
+    "explored": {
+      "type": "boolean"
+    },
+    "repositioned": {
+      "type": "boolean"
+    },
+    "pruned_exits": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "fallback_reason": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "signature": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "danger",
+    "distance_from_start",
+    "enemies",
+    "enemy_count",
+    "exit_count",
+    "exits",
+    "explored",
+    "fallback_reason",
+    "floor_tiles",
+    "height",
+    "index",
+    "item_count",
+    "items",
+    "origin",
+    "parent_frontier",
+    "pruned_exits",
+    "repositioned",
+    "room_id",
+    "room_type",
+    "run",
+    "signature",
+    "size",
+    "source",
+    "width"
+  ],
+  "additionalProperties": false
+}

@@ -1,0 +1,13 @@
+{
+  "schema_version": "1.0.0",
+  "about": "TEMPLATE for SUBJECTIVE impressions (how a session felt). Each note must say who, when and in what context, and be marked kind=subjective. Numbers you measured belong in a bundle, not here.",
+  "observations": [],
+  "example": {
+    "kind": "subjective",
+    "author": "your name",
+    "date": "YYYY-MM-DD",
+    "selection": "provider/model, or null for the whole run",
+    "context": "how you observed it, e.g. 20 minutes of play on desktop, live director",
+    "text": "e.g. rooms felt samey after the first ten"
+  }
+}

@@ -1,0 +1,229 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/mule/ai-hack-poc/benchmarks/simulation/schemas/manifest.schema.json",
+  "title": "Simulation manifest",
+  "description": "manifest.json: what was run.",
+  "x-dataset-schema-version": "1.0.0",
+  "type": "object",
+  "properties": {
+    "schema_version": {
+      "type": "string",
+      "pattern": "^\\d+\\.\\d+\\.\\d+$"
+    },
+    "kind": {
+      "const": "dungeon-simulation"
+    },
+    "contract_version": {
+      "type": "string"
+    },
+    "engine": {
+      "type": "string",
+      "description": "Godot version string; omitted from fixtures."
+    },
+    "config": {
+      "type": "object",
+      "properties": {
+        "runs": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "steps": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "base_seed": {
+          "type": "integer"
+        },
+        "policy": {
+          "enum": [
+            "random",
+            "nearest"
+          ]
+        },
+        "faults": {
+          "enum": [
+            "none",
+            "flaky",
+            "hang"
+          ]
+        },
+        "audit_every": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "trigger_radius": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "max_in_flight": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "timeout_sec": {
+          "type": "number",
+          "exclusiveMinimum": 0
+        },
+        "stall_after_msec": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "tick_msec": {
+          "type": "integer",
+          "minimum": 1
+        }
+      },
+      "required": [
+        "audit_every",
+        "base_seed",
+        "faults",
+        "max_in_flight",
+        "policy",
+        "runs",
+        "stall_after_msec",
+        "steps",
+        "tick_msec",
+        "timeout_sec",
+        "trigger_radius"
+      ],
+      "additionalProperties": false
+    },
+    "provider": {
+      "type": "object",
+      "properties": {
+        "mode": {
+          "enum": [
+            "rules-baseline",
+            "offline-fallback",
+            "remote"
+          ]
+        },
+        "provider": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "model": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "endpoint": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "endpoint",
+        "mode",
+        "model",
+        "provider"
+      ],
+      "additionalProperties": false,
+      "description": "Provider/model configuration. Remote runs record the endpoint (no credentials are ever accepted in it)."
+    },
+    "remote": {
+      "type": "object",
+      "properties": {
+        "opt_in": {
+          "type": "boolean"
+        },
+        "request_budget": {
+          "anyOf": [
+            {
+              "type": "integer",
+              "minimum": 1
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "opt_in",
+        "request_budget"
+      ],
+      "additionalProperties": false,
+      "description": "opt_in is true only when --remote was passed."
+    },
+    "runs": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "run": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "seed": {
+            "type": "integer"
+          },
+          "run_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "run",
+          "run_id",
+          "seed"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "files": {
+      "type": "object",
+      "properties": {
+        "manifest": {
+          "type": "string"
+        },
+        "steps": {
+          "type": "string"
+        },
+        "rooms": {
+          "type": "string"
+        },
+        "failures": {
+          "type": "string"
+        },
+        "summary": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "failures",
+        "manifest",
+        "rooms",
+        "steps",
+        "summary"
+      ],
+      "additionalProperties": false
+    }
+  },
+  "required": [
+    "config",
+    "contract_version",
+    "files",
+    "kind",
+    "provider",
+    "remote",
+    "runs",
+    "schema_version"
+  ],
+  "additionalProperties": false
+}

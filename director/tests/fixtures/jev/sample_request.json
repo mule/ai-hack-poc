@@ -1,0 +1,212 @@
+{
+  "model": "typesafe/jev",
+  "input": {
+    "state": {
+      "game": "roguelike dungeon director",
+      "task": "decide the room behind the unexplored exit",
+      "depth": 3,
+      "turn": 148,
+      "player": {
+        "hp": 22,
+        "max_hp": 30,
+        "hp_ratio": 0.733,
+        "level": 4,
+        "hunger": "normal",
+        "conditions": [
+          "poisoned"
+        ]
+      },
+      "recent_rooms": [
+        {
+          "room_id": "r-001",
+          "room_type": "entrance",
+          "danger": 1
+        },
+        {
+          "room_id": "r-002",
+          "room_type": "room",
+          "danger": 2
+        },
+        {
+          "room_id": "r-003",
+          "room_type": "corridor",
+          "danger": 1
+        }
+      ],
+      "recent_events": [
+        {
+          "event": "found_secret_door",
+          "turn": 122
+        },
+        {
+          "event": "defeated_kobold",
+          "turn": 140
+        }
+      ],
+      "inventory": [
+        {
+          "item_id": "torch",
+          "quantity": 3,
+          "category": "tool"
+        },
+        {
+          "item_id": "bread_ration",
+          "quantity": 2,
+          "category": "food"
+        }
+      ],
+      "unresolved_exits": [
+        {
+          "room_id": "r-003",
+          "direction": "north",
+          "since_turn": 145
+        },
+        {
+          "room_id": "r-002",
+          "direction": "east",
+          "since_turn": 90
+        }
+      ],
+      "pacing": {
+        "rooms_on_depth": 6,
+        "secrets_found": 1,
+        "encounters_on_depth": 3,
+        "turns_on_depth": 52,
+        "average_recent_danger": 1.6
+      },
+      "frontier": {
+        "room_id": "r-003",
+        "direction": "north",
+        "since_turn": 145
+      },
+      "prompt_hint": "Player is cautious and low on HP; prefer a safer room with a chance of food.",
+      "options": {
+        "max_danger": 3,
+        "forbidden_room_types": [
+          "vault"
+        ],
+        "allow_secrets": true,
+        "target_enemy_density": 0.2,
+        "target_loot_density": 0.4
+      }
+    },
+    "questions": {
+      "room_type": {
+        "type": "choice",
+        "instructions": "Which archetype should the new room behind `state.frontier` take, given `state.depth`, `state.recent_rooms`, `state.pacing`, `state.player` and `state.options`?",
+        "criteria": {
+          "room": "A standard dungeon room with mixed contents.",
+          "corridor": "A narrow passage that carries the dungeon onward.",
+          "cavern": "A large, irregular natural cavity.",
+          "chamber": "A worked-stone chamber built for a purpose.",
+          "shrine": "A small consecrated place of quiet and recovery.",
+          "shop": "A keeper's outpost selling supplies.",
+          "treasure": "A rich trove room; deeper floors only.",
+          "stairs_down": "A way down to the next depth; fits once several rooms of this depth are known."
+        }
+      },
+      "size": {
+        "type": "choice",
+        "instructions": "How large should the new room be for `state.depth` and its archetype (asked separately so pacing stays tunable)?",
+        "criteria": {
+          "tiny": "A cramped closet of a space.",
+          "small": "A modest space, quick to explore.",
+          "medium": "An ordinarily sized space.",
+          "large": "A spacious hall.",
+          "huge": "A vast, sweeping space."
+        }
+      },
+      "danger": {
+        "type": "score",
+        "instructions": "How much danger should the new room hold for `state.player` (wounded players need breathing room) and `state.pacing`?",
+        "criteria": [
+          "Danger 1: trivial, nothing threatening.",
+          "Danger 2: light, weak monsters or minor hazards.",
+          "Danger 3: moderate, a fair fight.",
+          "Danger 4: hard, dangerous for a wounded adventurer.",
+          "Danger 5: deadly, likely to kill the unprepared."
+        ]
+      },
+      "enemy_density": {
+        "type": "score",
+        "instructions": "How crowded with enemies should the new room be?",
+        "criteria": [
+          "Empty: no enemies at all.",
+          "Sparse: an isolated threat or two.",
+          "Steady: a normal complement of enemies.",
+          "Heavy: frequent enemies.",
+          "Teeming: enemies at every turn."
+        ]
+      },
+      "loot_density": {
+        "type": "score",
+        "instructions": "How much loot should the new room offer?",
+        "criteria": [
+          "Barren: nothing to find.",
+          "Scant: incidental sundries.",
+          "Steady: a normal amount of loot.",
+          "Rich: worthwhile finds.",
+          "Treasure trove: exceptional loot."
+        ]
+      },
+      "has_secret": {
+        "type": "noul",
+        "instructions": "The new room should contain a hidden secret the player can discover (a concealed door, hidden cache, or mechanism).",
+        "criteria": {
+          "true": "A secret fits the pacing and rewards exploration.",
+          "false": "No secret here; secrets belong elsewhere."
+        }
+      },
+      "exit_count": {
+        "type": "choice",
+        "instructions": "How many additional exits, beyond the connection back through `state.frontier`, should the new room offer for future exploration?",
+        "criteria": {
+          "0": "A dead end.",
+          "1": "One new branch.",
+          "2": "Two new branches.",
+          "3": "A junction with three new branches."
+        }
+      },
+      "tag_dark": {
+        "type": "noul",
+        "instructions": "The new room fits this description: This room is dark, hindering sight. Judge it against `state.recent_rooms` and `state.depth` for variety."
+      },
+      "tag_flooded": {
+        "type": "noul",
+        "instructions": "The new room fits this description: This room is partly flooded with water. Judge it against `state.recent_rooms` and `state.depth` for variety."
+      },
+      "tag_fungal": {
+        "type": "noul",
+        "instructions": "The new room fits this description: Fungal growth spreads across this room. Judge it against `state.recent_rooms` and `state.depth` for variety."
+      },
+      "tag_icy": {
+        "type": "noul",
+        "instructions": "The new room fits this description: This room is freezing and slick with ice. Judge it against `state.recent_rooms` and `state.depth` for variety."
+      },
+      "tag_hot": {
+        "type": "noul",
+        "instructions": "The new room fits this description: This room is hot: steam, embers, or geothermal heat. Judge it against `state.recent_rooms` and `state.depth` for variety."
+      },
+      "tag_ruined": {
+        "type": "noul",
+        "instructions": "The new room fits this description: This room is collapsed or ruined masonry. Judge it against `state.recent_rooms` and `state.depth` for variety."
+      },
+      "tag_hallowed": {
+        "type": "noul",
+        "instructions": "The new room fits this description: This room is consecrated and calm. Judge it against `state.recent_rooms` and `state.depth` for variety."
+      },
+      "tag_trapped": {
+        "type": "noul",
+        "instructions": "The new room fits this description: This room conceals mechanical or magical traps. Judge it against `state.recent_rooms` and `state.depth` for variety."
+      },
+      "tag_overgrown": {
+        "type": "noul",
+        "instructions": "The new room fits this description: Roots and strange plants overgrow this room. Judge it against `state.recent_rooms` and `state.depth` for variety."
+      },
+      "tag_noisy": {
+        "type": "noul",
+        "instructions": "The new room fits this description: This room drones with unsettling noise. Judge it against `state.recent_rooms` and `state.depth` for variety."
+      }
+    }
+  }
+}

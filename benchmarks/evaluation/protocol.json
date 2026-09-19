@@ -1,0 +1,39 @@
+{
+  "protocol_id": "poc-eval",
+  "protocol_version": "1.0.0",
+  "design": {
+    "pairing": "every provider/model answers the same request back to back, so each comparison is between decisions made within seconds of each other",
+    "order": "each iteration visits the corpus in a seeded shuffle; the provider order rotates with the position so no provider is always first or last",
+    "concurrency": "1: latency is measured one request at a time, so queueing on our side never leaks into the numbers",
+    "retries": "none: the director and every adapter make exactly one provider call per request"
+  },
+  "concurrency": 1,
+  "default_timeout_seconds": 10.0,
+  "order_seed": 18,
+  "tiers": {
+    "smoke": {
+      "warmup_requests": 3,
+      "iterations": 1,
+      "purpose": "wiring check; too few samples for tail claims"
+    },
+    "standard": {
+      "warmup_requests": 10,
+      "iterations": 3,
+      "purpose": "median and p90 comparisons; p95 for a corpus of about 100 requests"
+    },
+    "full": {
+      "warmup_requests": 20,
+      "iterations": 7,
+      "purpose": "p99 becomes reportable for a corpus of about 150 requests"
+    }
+  },
+  "percentiles": {"p50": 0.5, "p90": 0.9, "p95": 0.95, "p99": 0.99},
+  "min_tail_samples": 10,
+  "sample_size_rule": "a percentile p is reliable when at least min_tail_samples observations lie above it: n >= ceil(min_tail_samples / (1 - p))",
+  "metric_classes": {
+    "measured": "read directly from a call: latency, outcome, error code, reported tokens, reported cost, returned plan",
+    "derived": "computed from measured values plus an operator-supplied input (a price table with a cited source)",
+    "descriptive": "computed from the returned plans; describes behaviour and does not rank it",
+    "subjective": "a person's impression; recorded separately and never mixed into a table of measurements"
+  }
+}

@@ -1,0 +1,50 @@
+# Local credentials and config (only .env.example is tracked)
+.env
+.env.*
+!.env.example
+secrets/
+*.pem
+*.key
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+build/
+dist/
+.pytest_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Godot 4
+.godot/
+.import/
+*.translation
+builds/
+
+# Android signing material must never be committed
+*.keystore
+*.jks
+
+# Generated simulation datasets (make simulate). Sanitized fixtures live in
+# benchmarks/simulation/fixtures/ and stay tracked.
+simulation-output/
+
+# Generated evaluation evidence bundles and local (unsourced-by-default) inputs
+# (issue #18). The fixed replay corpus in benchmarks/corpus/replay-v1/ stays tracked.
+evaluation-output/
+benchmarks/corpus/live/
+benchmarks/evaluation/pricing.local.json
+benchmarks/evaluation/observations.local.json
+
+# Editors / OS
+.vscode/
+.idea/
+.DS_Store
+
+# Local agent tooling
+.remember/
+graphify-out/

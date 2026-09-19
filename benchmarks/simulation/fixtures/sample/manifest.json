@@ -1,0 +1,42 @@
+{
+  "config": {
+    "audit_every": 1,
+    "base_seed": 7,
+    "faults": "flaky",
+    "max_in_flight": 3,
+    "policy": "random",
+    "runs": 1,
+    "stall_after_msec": 0,
+    "steps": 12,
+    "tick_msec": 100,
+    "timeout_sec": 5.0,
+    "trigger_radius": 3
+  },
+  "contract_version": "1.0.0",
+  "files": {
+    "failures": "failures.jsonl",
+    "manifest": "manifest.json",
+    "rooms": "rooms.jsonl",
+    "steps": "steps.jsonl",
+    "summary": "summary.json"
+  },
+  "kind": "dungeon-simulation",
+  "provider": {
+    "endpoint": null,
+    "mode": "rules-baseline",
+    "model": "builtin-v1",
+    "provider": "rules-baseline"
+  },
+  "remote": {
+    "opt_in": false,
+    "request_budget": null
+  },
+  "runs": [
+    {
+      "run": 0,
+      "run_id": "sim-7",
+      "seed": 7
+    }
+  ],
+  "schema_version": "1.0.0"
+}

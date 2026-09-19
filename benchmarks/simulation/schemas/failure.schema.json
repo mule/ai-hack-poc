@@ -1,0 +1,61 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/mule/ai-hack-poc/benchmarks/simulation/schemas/failure.schema.json",
+  "title": "Simulation failure row",
+  "description": "One line of failures.jsonl.",
+  "x-dataset-schema-version": "1.0.0",
+  "type": "object",
+  "properties": {
+    "kind": {
+      "enum": [
+        "topology",
+        "reachability",
+        "overlap",
+        "placement_conflict",
+        "stall",
+        "budget"
+      ]
+    },
+    "severity": {
+      "enum": [
+        "error",
+        "warning",
+        "info"
+      ]
+    },
+    "run": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "step": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "frontier": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "message": {
+      "type": "string"
+    },
+    "detail": {
+      "type": "object"
+    }
+  },
+  "required": [
+    "detail",
+    "frontier",
+    "kind",
+    "message",
+    "run",
+    "severity",
+    "step"
+  ],
+  "additionalProperties": false
+}
