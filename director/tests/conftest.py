@@ -16,14 +16,18 @@ Tests marked ``live`` opt out; they are gated separately by their own
 ``RUN_LIVE_*`` variable plus credentials.
 """
 
-from __future__ import annotations
-
 import os
 import socket
+import sys
 from collections.abc import Iterator
+from pathlib import Path
 from typing import Any
 
 import pytest
+
+_REPO_ROOT = Path(__file__).resolve().parent.parent.parent
+if str(_REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(_REPO_ROOT))
 
 _LOOPBACK_HOSTS = {"", "localhost", "127.0.0.1", "::1", "0.0.0.0"}
 _TELEMETRY_ENV = (

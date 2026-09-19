@@ -14,6 +14,7 @@ const StubDirector = preload("res://tests/support/stub_director.gd")
 const MiniHttpServer = preload("res://tests/support/mini_http_server.gd")
 const DungeonRenderer = preload("res://src/dungeon_renderer.gd")
 const OfflineTransport = preload("res://world/offline_transport.gd")
+const GenerationRecorder = preload("res://world/generation_recorder.gd")
 const TileType = GameState.TileType
 
 const NORTH := "r-000:north"
@@ -64,6 +65,7 @@ func _run() -> void:
 	await _step("test_shutdown_cancels_in_flight_requests", _test_shutdown_cancels_in_flight_requests)
 	await _step("test_http_client", _test_http_client)
 	await _step("test_coordinator_over_real_http", _test_coordinator_over_real_http)
+	await _step("test_generation_recording", _test_generation_recording)
 	_completed = true
 	_finish()
 
@@ -747,3 +749,43 @@ func _test_coordinator_over_real_http() -> void:
 	_check(state.world.integrity_violations().is_empty(), "world integrity holds after mixed outcomes")
 	client.queue_free()
 	_end()
+
+
+func _test_generation_recording() -> void:
+	print("\nTest: GenerationRecorder persists requests and committed/fallback outcomes as JSONL")
+	var log_path := "user://test_recordings/events.jsonl"
+	if FileAccess.file_exists(log_path):
+		DirAccess.remove_absolute(ProjectSettings.globalize_path(log_path))
+	var rec := GenerationRecorder.new(log_path)
+	_check(rec.is_active(), "recorder opened JSONL file for writing")
+	var env := _env()
+	env.coord.recorder = rec
+	var request := _request_north(env)
+	var plan := StubDirector.simple_plan(request, "r-rec-1", "small", ["east"])
+	env.transport.deliver(0, StubDirector.success_result(request, plan))
+	env.coord.update()
+	_check_eq(env.state.world.get_frontier(NORTH).status, DungeonWorld.STATUS_COMMITTED, "north committed")
+	rec.close()
+
+	_check(FileAccess.file_exists(log_path), "JSONL file exists on disk")
+	var file := FileAccess.open(log_path, FileAccess.READ)
+	_check(file != null, "opened recorded JSONL file")
+	var line := file.get_line()
+	_check(line != "", "at least one line recorded")
+	var parsed: Variant = JSON.parse_string(line)
+	_check(parsed is Dictionary, "recorded line is valid JSON")
+	if parsed is Dictionary:
+		_check_eq(parsed.get("contract_version", ""), DungeonContracts.CONTRACT_VERSION, "contract_version matches")
+		_check_eq(parsed.get("request_id", ""), request.request_id, "request_id matches")
+		_check_eq(parsed.get("run_id", ""), request.run_id, "run_id matches")
+		_check_eq(parsed.get("outcome", ""), "committed", "outcome recorded as committed")
+		_check_eq(parsed.get("source", ""), "director", "source recorded as director")
+		_check(parsed.has("request"), "record contains canonical request")
+		_check(parsed.has("result"), "record contains result payload")
+		_check(parsed.has("seed"), "record contains seed")
+		var target_exit: Dictionary = parsed.get("target_exit", {})
+		_check_eq(target_exit.get("direction", ""), "north", "target exit recorded")
+	file.close()
+	DirAccess.remove_absolute(ProjectSettings.globalize_path(log_path))
+	_end()
+
