@@ -1,12 +1,35 @@
 class_name GameState
 extends RefCounted
 
+const RoomGenerator = preload("res://generation/room_generator.gd")
+const DungeonWorld = preload("res://world/dungeon_world.gd")
+
+# Values match GeneratedRoom.TileType so generated tiles drop in unchanged.
 const TileType = {
 	FLOOR = 0,
 	WALL = 1,
 	DOOR_CLOSED = 2,
 	DOOR_OPEN = 3,
-	STAIRS_DOWN = 4
+	STAIRS_DOWN = 4,
+	STAIRS_UP = 5,
+	SECRET_DOOR = 6
+}
+
+# Dynamic-world start: one small committed room whose exits lead into unknown space.
+const START_PLAN = {
+	"room_id": "r-000",
+	"depth": 1,
+	"room_type": "entrance",
+	"size": "small",
+	"danger": 1,
+	"exits": [
+		{"direction": "north", "kind": "door", "locked": false},
+		{"direction": "east", "kind": "door", "locked": false},
+		{"direction": "west", "kind": "door", "locked": false},
+	],
+	"enemy_density": 0.0,
+	"loot_density": 0.3,
+	"secret_probability": 0.0,
 }
 
 const EnemyType = {
@@ -21,6 +44,12 @@ const ItemType = {
 
 var grid_width: int = 24
 var grid_height: int = 16
+
+# Deferred-generation world (null for the legacy static map). `map_tiles` is
+# the same dictionary as `world.tiles` while the dynamic world is active.
+var dynamic_world: bool = false
+var world_seed: int = 1
+var world: DungeonWorld = null
 
 # Map data: Dict of Vector2i -> int (TileType)
 var map_tiles: Dictionary = {}
@@ -50,8 +79,14 @@ var message_log: Array[String] = []
 func _init() -> void:
 	reset_game()
 
+## Switch this state to the deferred-generation world and restart the run.
+func enable_dynamic_world(seed_value: int = 1) -> void:
+	dynamic_world = true
+	world_seed = seed_value
+	reset_game()
+
 func reset_game() -> void:
-	map_tiles.clear()
+	map_tiles = {}
 	enemies.clear()
 	items.clear()
 	message_log.clear()
@@ -63,13 +98,54 @@ func reset_game() -> void:
 	player_score = 0
 	player_turns = 0
 	is_player_dead = false
-	_build_default_map()
+	if dynamic_world:
+		_build_start_world()
+	else:
+		world = null
+		_build_default_map()
 	log_message("Welcome to the dungeon! Move with Arrow keys/WASD, Numpad, or on-screen D-Pad.")
 
 func log_message(msg: String) -> void:
 	message_log.append(msg)
 	if message_log.size() > 50:
 		message_log.pop_front()
+
+func _build_start_world() -> void:
+	world = DungeonWorld.new()
+	world.run_id = _new_run_id()
+	map_tiles = world.tiles
+	var room := RoomGenerator.generate(START_PLAN, ("%d|start" % world_seed).hash())
+	var res: Dictionary = world.commit_start_room(room, Vector2i.ZERO, 0)
+	assert(res.ok, "start room must commit")
+	var record: Dictionary = res.room
+	record.meta = {"room_type": START_PLAN.room_type, "danger": START_PLAN.danger}
+	player_pos = room.player_spawn
+	_spawn_room_entities(record)
+
+func _new_run_id() -> String:
+	# A reset starts a distinct playthrough even when it reuses the same world
+	# seed. The seed controls generated geometry; this nonce is correlation and
+	# stale-response identity only. 128 random bits fit comfortably in the
+	# contract's 64-character bounded id.
+	return "run-%s" % Crypto.new().generate_random_bytes(16).hex_encode()
+
+## Commit a generated room for frontier `key` through the world (the only
+## writer of committed geometry) and spawn its entities. See
+## DungeonWorld.commit_generated for the outcome/reason contract.
+func commit_generated_room(key: String, request_id: String, room: RefCounted, source: String, meta: Dictionary) -> Dictionary:
+	if world == null:
+		return {"ok": false, "outcome": "stale", "reason": "no_world"}
+	var res: Dictionary = world.commit_generated(key, request_id, room, source, player_turns, meta)
+	if res.ok:
+		_spawn_room_entities(res.room)
+		log_message("A new area opens up ahead.")
+	return res
+
+func _spawn_room_entities(record: Dictionary) -> void:
+	for enemy in record.enemies:
+		spawn_enemy(enemy.type, enemy.pos)
+	for item in record.items:
+		spawn_item(item.type, item.pos)
 
 func _build_default_map() -> void:
 	# Default static map: Two rooms connected by a corridor with a door
@@ -126,7 +202,7 @@ func is_walkable(pos: Vector2i) -> bool:
 	if not map_tiles.has(pos):
 		return false
 	var t: int = map_tiles[pos]
-	return t == TileType.FLOOR or t == TileType.DOOR_OPEN or t == TileType.STAIRS_DOWN
+	return t == TileType.FLOOR or t == TileType.DOOR_OPEN or t == TileType.STAIRS_DOWN or t == TileType.STAIRS_UP
 
 func get_enemy_at(pos: Vector2i) -> Dictionary:
 	for e in enemies:
@@ -210,9 +286,9 @@ func player_action_step(dir: Vector2i) -> bool:
 		
 	# 2. Check if tile is a closed door -> Open it!
 	var tile: int = get_tile(target_pos)
-	if tile == TileType.DOOR_CLOSED:
+	if tile == TileType.DOOR_CLOSED or tile == TileType.SECRET_DOOR:
 		map_tiles[target_pos] = TileType.DOOR_OPEN
-		log_message("You open the door.")
+		log_message("You open the door." if tile == TileType.DOOR_CLOSED else "You find a hidden door and open it.")
 		_process_turn()
 		return true
 		
@@ -224,6 +300,11 @@ func player_action_step(dir: Vector2i) -> bool:
 		_process_turn()
 		return true
 		
+	# Unknown space beyond an exit that is still being generated
+	if world != null and not world.open_frontier_leading_to(target_pos).is_empty():
+		log_message("The way ahead is still taking shape...")
+		return false
+
 	# Bump into wall
 	log_message("Ouch! You bump into a wall.")
 	return false

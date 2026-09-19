@@ -252,7 +252,13 @@ shell:
 godot --path game
 ```
 
-How the client locates the director is defined by the game shell.
+The game requests rooms from the director lazily as the player approaches
+unexplored exits (`POST /v1/generate`), and falls back to a local rules baseline
+if the director is unreachable, slow or returns something unusable. Point it at
+a director with `DUNGEON_DIRECTOR_URL` (default `http://127.0.0.1:8000`, or
+`offline` to use local rules only); optional `DUNGEON_DIRECTOR_PROVIDER` and
+`DUNGEON_DIRECTOR_MODEL` select a provider/model by id. See
+[game/README.md](game/README.md#deferred-dungeon-generation).
 
 ## Development commands
 
@@ -265,7 +271,7 @@ How the client locates the director is defined by the game shell.
 | `make format` | `ruff check --fix` + `ruff format` |
 | `make check` | `lint` + `test` (Python only, no Godot needed) |
 | `make godot-check` | Headless-load the Godot project for 10 frames; log at `/tmp/godot-load.log`. Fails with a message if `game/project.godot` is absent |
-| `make godot-test` | Headless Godot tests: `game/tests/test_mechanics.gd` (required), then `test_contracts.gd` and `test_scene_smoke.gd` if they exist. Requires `game/project.godot`. Logs: `/tmp/godot-mechanics.log`, `/tmp/godot-contracts.log`, `/tmp/godot-scene-smoke.log` |
+| `make godot-test` | Headless Godot tests: `game/tests/test_mechanics.gd` (required), then the contract, room-generator, deferred-generation (`test_deferred_world.gd`, `test_deferred_generation.gd`, `test_deferred_simulation.gd`) and scene-smoke suites if they exist. Requires `game/project.godot`. Fails on `SCRIPT ERROR:`/`Parse Error:`/`Failed to load script` in a log, or a missing success sentinel. Logs: `/tmp/godot-*.log` |
 | `make godot-lint` | `gdlint game` (install with `pip install gdtoolkit`) |
 | `make clean` | Remove the virtualenv, Python caches and `director/build`, `director/dist` |
 

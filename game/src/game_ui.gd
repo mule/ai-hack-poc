@@ -29,6 +29,12 @@ func update_ui(game_state: RefCounted) -> void:
 		game_state.player_turns,
 		game_state.player_score
 	]
+	if game_state.world != null:
+		stats_label.text += " | Rooms: %d" % game_state.world.rooms.size()
+		if game_state.world.pending_count() > 0:
+			stats_label.text += " | Exploring..."
+		if game_state.world.counters.fallbacks > 0:
+			stats_label.text += " | Fallbacks: %d" % game_state.world.counters.fallbacks
 	
 	if death_overlay:
 		death_overlay.visible = game_state.is_player_dead

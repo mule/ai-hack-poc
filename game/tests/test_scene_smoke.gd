@@ -16,6 +16,8 @@ var tests_failed: int = 0
 var smoke_completed_sentinel: bool = false
 
 func _init() -> void:
+	# Hermetic: never contact a director from the smoke test.
+	OS.set_environment("DUNGEON_DIRECTOR_URL", "offline")
 	process_frame.connect(_run_tests, CONNECT_ONE_SHOT)
 
 func _run_tests() -> void:

@@ -19,6 +19,29 @@ const COLOR_GOBLIN = Color(0.85, 0.3, 0.2) # red
 const COLOR_ORC = Color(0.75, 0.2, 0.75)   # purple/magenta
 const COLOR_ITEM_POTION = Color(0.2, 0.6, 1.0) # blue
 const COLOR_ITEM_SWORD = Color(1.0, 0.85, 0.2) # gold/yellow
+const COLOR_STAIRS = Color(0.55, 0.6, 0.7)
+
+# Unresolved exits (deferred generation): a highlighted door plus a hatched
+# "unknown" cell beyond it. Pending exits use a warmer colour.
+const COLOR_FRONTIER_UNRESOLVED = Color(0.62, 0.4, 1.0) # violet
+const COLOR_FRONTIER_PENDING = Color(1.0, 0.72, 0.2)    # amber
+const COLOR_UNKNOWN_FILL = Color(0.10, 0.06, 0.18)
+
+func frontier_color(status: String) -> Color:
+	return COLOR_FRONTIER_PENDING if status == "pending" else COLOR_FRONTIER_UNRESOLVED
+
+## One entry per open frontier: {door, unknown, status, direction}. `door` is
+## the exit tile, `unknown` the not-yet-generated cell it leads into. _draw()
+## renders exactly this list.
+func frontier_markers() -> Array[Dictionary]:
+	var markers: Array[Dictionary] = []
+	if game_state == null or game_state.world == null:
+		return markers
+	for f in game_state.world.open_frontiers():
+		if game_state.get_tile(f.pos) == GameState.TileType.WALL:
+			continue
+		markers.append({"door": f.pos, "unknown": f.outward, "status": f.status, "direction": f.direction})
+	return markers
 
 func _draw() -> void:
 	if not game_state:
@@ -30,7 +53,7 @@ func _draw() -> void:
 		var rect = Rect2(pos.x * TILE_SIZE, pos.y * TILE_SIZE, TILE_SIZE, TILE_SIZE)
 		
 		match tile_type:
-			GameState.TileType.WALL:
+			GameState.TileType.WALL, GameState.TileType.SECRET_DOOR:
 				draw_rect(rect, COLOR_WALL)
 				draw_rect(rect, COLOR_WALL_OUTLINE, false, 2.0)
 			GameState.TileType.FLOOR:
@@ -52,6 +75,13 @@ func _draw() -> void:
 				# Draw open door frame
 				draw_rect(Rect2(pos.x * TILE_SIZE + 2, pos.y * TILE_SIZE + 2, 6, TILE_SIZE - 4), COLOR_DOOR_OPEN)
 				draw_rect(Rect2(pos.x * TILE_SIZE + TILE_SIZE - 8, pos.y * TILE_SIZE + 2, 6, TILE_SIZE - 4), COLOR_DOOR_OPEN)
+			GameState.TileType.STAIRS_DOWN, GameState.TileType.STAIRS_UP:
+				draw_rect(rect, COLOR_FLOOR)
+				for step in range(4):
+					var y: int = pos.y * TILE_SIZE + 6 + step * 6
+					draw_line(Vector2(pos.x * TILE_SIZE + 5, y), Vector2(pos.x * TILE_SIZE + TILE_SIZE - 5, y), COLOR_STAIRS, 2.0)
+
+	_draw_frontiers()
 				
 	# Draw items
 	for item in game_state.items:
@@ -103,3 +133,29 @@ func _draw() -> void:
 		# Eyes/indicator
 		draw_circle(Vector2(ppos.x * TILE_SIZE + 11, ppos.y * TILE_SIZE + 12), 2.5, Color.BLACK)
 		draw_circle(Vector2(ppos.x * TILE_SIZE + 21, ppos.y * TILE_SIZE + 12), 2.5, Color.BLACK)
+
+
+func _draw_frontiers() -> void:
+	for marker in frontier_markers():
+		var color := frontier_color(marker.status)
+		var door: Vector2i = marker.door
+		var unknown: Vector2i = marker.unknown
+		# Door tile: coloured frame so the exit reads as "not yet explored".
+		draw_rect(Rect2(door.x * TILE_SIZE, door.y * TILE_SIZE, TILE_SIZE, TILE_SIZE), color, false, 3.0)
+		# Unknown cell: dark fill with diagonal hatching and a coloured border.
+		var cell := Rect2(unknown.x * TILE_SIZE, unknown.y * TILE_SIZE, TILE_SIZE, TILE_SIZE)
+		draw_rect(cell, COLOR_UNKNOWN_FILL)
+		for i in range(1, 4):
+			var offset := float(i * TILE_SIZE) / 4.0
+			draw_line(cell.position + Vector2(offset, 0), cell.position + Vector2(0, offset), color * Color(1, 1, 1, 0.6), 1.5)
+			draw_line(cell.position + Vector2(TILE_SIZE, offset), cell.position + Vector2(offset, TILE_SIZE), color * Color(1, 1, 1, 0.6), 1.5)
+		draw_rect(cell, color, false, 2.0)
+		# Arrow on the door pointing into the unknown.
+		var dir_vec: Vector2 = Vector2(unknown - door)
+		var center := Vector2(door.x * TILE_SIZE + TILE_SIZE / 2.0, door.y * TILE_SIZE + TILE_SIZE / 2.0)
+		var side := Vector2(-dir_vec.y, dir_vec.x)
+		draw_colored_polygon(PackedVector2Array([
+			center + dir_vec * 9.0,
+			center - dir_vec * 3.0 + side * 6.0,
+			center - dir_vec * 3.0 - side * 6.0,
+		]), color)

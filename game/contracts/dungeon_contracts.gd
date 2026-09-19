@@ -486,10 +486,10 @@ static func _fail(message: String) -> Dictionary:
 
 
 static func _parse_json_object(text: String, what: String) -> Dictionary:
-	var data: Variant = JSON.parse_string(text)
-	if data == null or not (data is Dictionary):
+	var parser := JSON.new()
+	if parser.parse(text) != OK or not (parser.data is Dictionary):
 		return _fail("%s: invalid JSON" % what)
-	return {"ok": true, "value": data}
+	return {"ok": true, "value": parser.data}
 
 
 static func _check_keys(data: Variant, required: Array, optional: Array, path: String) -> String:

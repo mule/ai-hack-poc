@@ -12,12 +12,17 @@ GODOT_LOG_DIR ?= /tmp
 # headless run writes an explicit log and that log is scanned afterwards.
 # Only `SCRIPT ERROR:` and `Parse Error:` fail the run; a generic `ERROR:` line
 # is allowed (the contract test feeds deliberately invalid JSON).
-# Usage: $(call godot_run,<godot args>,<log file>)
+# `Failed to load script` is scanned too: it is what a script that does not
+# compile reports when it is loaded indirectly (e.g. a scene's script).
+# Optional third argument: a success sentinel that must appear in the log, so a
+# run that never reaches its own final verdict cannot pass on exit code alone.
+# Usage: $(call godot_run,<godot args>,<log file>[,<success sentinel>])
 define godot_run
 rm -f $(2); \
 $(GODOT) --headless --path game $(1) --log-file $(2); rc=$$?; \
 test -f $(2) || { echo "FAIL: no Godot log written to $(2)"; exit 1; }; \
-if grep -nE 'SCRIPT ERROR:|Parse Error:' $(2); then echo "FAIL: script errors found in $(2)"; exit 1; fi; \
+if grep -nE 'SCRIPT ERROR:|Parse Error:|Failed to load script' $(2); then echo "FAIL: script errors found in $(2)"; exit 1; fi; \
+if test -n "$(3)" && ! grep -qF "$(3)" $(2); then echo "FAIL: success sentinel '$(3)' missing from $(2)"; exit 1; fi; \
 exit $$rc
 endef
 
@@ -56,7 +61,7 @@ godot-check: ## Headless-load the Godot project; fails on script parse/runtime e
 	@test -f game/project.godot || { echo "game/project.godot not found: the Godot shell is not in this checkout yet"; exit 1; }
 	@$(call godot_run,--quit-after 10,$(GODOT_LOG_DIR)/godot-load.log)
 
-godot-test: ## Run Godot tests headlessly (mechanics plus optional contract, generator, and smoke suites)
+godot-test: ## Run Godot tests headlessly (mechanics plus optional contract, generator, deferred-generation, and smoke suites)
 	@test -f game/project.godot || { echo "game/project.godot not found: the Godot shell is not in this checkout yet"; exit 1; }
 	@test -f game/tests/test_mechanics.gd || { echo "game/tests/test_mechanics.gd not found"; exit 1; }
 	@$(call godot_run,-s res://tests/test_mechanics.gd,$(GODOT_LOG_DIR)/godot-mechanics.log)
@@ -71,6 +76,24 @@ godot-test: ## Run Godot tests headlessly (mechanics plus optional contract, gen
 		$(call godot_run,-s res://tests/test_room_generator.gd,$(GODOT_LOG_DIR)/godot-room-generator.log); \
 	else \
 		echo "game/tests/test_room_generator.gd not present: skipping room-generator test"; \
+	fi
+	@if test -f game/tests/test_deferred_world.gd; then \
+		echo "Running deferred-generation world test (#7)"; \
+		$(call godot_run,-s res://tests/test_deferred_world.gd,$(GODOT_LOG_DIR)/godot-deferred-world.log,SUCCESS: All deferred world checks passed); \
+	else \
+		echo "game/tests/test_deferred_world.gd not present: skipping deferred world test"; \
+	fi
+	@if test -f game/tests/test_deferred_generation.gd; then \
+		echo "Running deferred-generation coordinator/client/scene test (#7)"; \
+		$(call godot_run,-s res://tests/test_deferred_generation.gd,$(GODOT_LOG_DIR)/godot-deferred-generation.log,SUCCESS: All deferred generation checks passed); \
+	else \
+		echo "game/tests/test_deferred_generation.gd not present: skipping deferred generation test"; \
+	fi
+	@if test -f game/tests/test_deferred_simulation.gd; then \
+		echo "Running deferred-generation simulation (#7)"; \
+		$(call godot_run,-s res://tests/test_deferred_simulation.gd,$(GODOT_LOG_DIR)/godot-deferred-simulation.log,SUCCESS: All deferred simulation checks passed); \
+	else \
+		echo "game/tests/test_deferred_simulation.gd not present: skipping deferred simulation"; \
 	fi
 	@if test -f game/tests/test_scene_smoke.gd; then \
 		echo "Running scene smoke test"; \
