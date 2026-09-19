@@ -20,8 +20,8 @@ Early bootstrap. What exists today and what does not:
 | Shared plan contract (`RoomPlan`) | `director/dungeon_director/contracts.py` | Owned by issue #3. |
 | Simulation harness | `game/simulation/`, `benchmarks/simulation/` | Issue #16: `make simulate` grows dungeons headlessly with the real generation code and writes JSON/JSONL datasets (offline rules baseline by default; explicit, budget-capped `--remote` opt-in). See [benchmarks/simulation/README.md](benchmarks/simulation/README.md). |
 | Benchmarks / replay | `benchmarks/` | Replay and reporting are placeholders; only the simulation harness exists. |
-| Observability | `observability/` | Placeholder README only. |
-| Docker Compose | n/a | None yet. Added only if it helps local observability/service startup; the Godot client is never containerized. |
+| Observability | `observability/` | Issue #11: OpenTelemetry traces and bounded-cardinality metrics for generation decisions, plus a local OpenLIT stack. See [observability/README.md](observability/README.md). |
+| Docker Compose | `observability/docker-compose.yml` | OpenLIT + ClickHouse for local observability only; the director and Godot client remain host processes. |
 
 ## Architecture
 
@@ -378,7 +378,8 @@ director/       FastAPI director service
                       registry.py, rules.py (baseline), cloudflare_jev.py
                       (TypeSafe Jev via Cloudflare, issue #8), groq.py
                       (Groq GPT-OSS, issue #9), cerebras.py
-                      (Cerebras Qwen, issue #10), settings.py, contracts.py
+                      (Cerebras Qwen, issue #10), telemetry.py
+                      (OpenTelemetry, issue #11), settings.py, contracts.py
   docs/               Provider docs (cloudflare-jev.md, groq.md, cerebras.md)
   tests/              Offline tests + fixtures (incl. sanitized provider samples)
                  and live tests (Jev, Groq, and Cerebras,
@@ -386,7 +387,7 @@ director/       FastAPI director service
                  for every other test)
 benchmarks/     Replay/benchmark tooling (placeholder); simulation/ holds the
                 simulation dataset docs, JSON Schemas and a sanitized fixture
-observability/  OpenTelemetry/OpenLIT config (placeholder)
+observability/  OpenLIT + ClickHouse compose stack and director telemetry docs (#11)
 Makefile        Local dev commands
 .env.example    Configuration template (no secrets)
 ```

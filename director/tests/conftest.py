@@ -3,6 +3,8 @@
 Ordinary tests must never reach a real provider, even on a machine that has
 provider credentials exported. For every test that is not marked ``live``:
 
+* ambient OpenTelemetry exporter settings are removed for every test, including
+  live provider tests, so test runs cannot leak telemetry to another service;
 * ``GROQ_*`` and ``RUN_LIVE_GROQ`` are removed from the environment, so a
   developer's real key cannot silently make a provider "available";
 * outbound sockets to anything but loopback (and DNS lookups for anything but
@@ -24,6 +26,11 @@ from typing import Any
 import pytest
 
 _LOOPBACK_HOSTS = {"", "localhost", "127.0.0.1", "::1", "0.0.0.0"}
+_TELEMETRY_ENV = (
+    "OTEL_EXPORTER_OTLP_ENDPOINT",
+    "DIRECTOR_OTEL_ENABLED",
+    "OTEL_SERVICE_NAME",
+)
 
 
 def _is_local_host(host: Any) -> bool:
@@ -48,6 +55,9 @@ def offline_guard(
 
     A test that deliberately provokes the guard must ``clear()`` the list.
     """
+    for name in _TELEMETRY_ENV:
+        monkeypatch.delenv(name, raising=False)
+
     if request.node.get_closest_marker("live"):
         yield None
         return

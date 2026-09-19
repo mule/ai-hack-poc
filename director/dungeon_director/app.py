@@ -28,6 +28,8 @@ per registry sweep (the Jev provider's is idempotent).
 
 from __future__ import annotations
 
+import asyncio
+import logging
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from typing import Annotated, Any
@@ -42,8 +44,11 @@ from dungeon_director.contracts import ErrorKind, GenerationRequest, GenerationR
 from dungeon_director.registry import ProviderDescriptor, ProviderRegistry, default_registry
 from dungeon_director.service import DirectorService
 from dungeon_director.settings import DirectorSettings
+from dungeon_director.telemetry import DirectorTelemetry, TelemetrySettings, setup_telemetry
 
 __all__ = ["DirectorConfig", "app", "create_app"]
+
+logger = logging.getLogger(__name__)
 
 _SERVICE_NAME = "dungeon-director"
 _GENERATE_PATH = "/v1/generate"
@@ -65,6 +70,7 @@ def get_service(request: Request) -> DirectorService:
 def create_app(
     settings: DirectorSettings | None = None,
     registry: ProviderRegistry | None = None,
+    telemetry: DirectorTelemetry | None = None,
 ) -> FastAPI:
     """Build an isolated director app.
 
@@ -79,7 +85,8 @@ def create_app(
     """
     settings = settings if settings is not None else DirectorSettings.from_env()
     registry = registry if registry is not None else default_registry()
-    service = DirectorService(registry, settings)
+    telemetry = telemetry if telemetry is not None else _default_telemetry()
+    service = DirectorService(registry, settings, telemetry=telemetry)
     default_model = registry.select(settings.default_provider, settings.default_model).model
 
     @asynccontextmanager
@@ -88,10 +95,19 @@ def create_app(
             yield
         finally:
             # Shutdown is best-effort per provider; cancellation propagates.
-            await registry.aclose()
+            try:
+                await registry.aclose()
+            finally:
+                # Flushing can block on an unreachable collector, so keep it off the
+                # event loop; a failure here must never break shutdown.
+                try:
+                    await asyncio.to_thread(telemetry.shutdown)
+                except Exception as exc:
+                    logger.warning("telemetry shutdown failed (%s)", type(exc).__name__)
 
     app = FastAPI(title="Dungeon Director", lifespan=lifespan)
     app.state.service = service
+    app.state.telemetry = telemetry
 
     @app.get("/health")
     def health() -> dict[str, str]:
@@ -146,7 +162,14 @@ def create_app(
     async def invalid_request(request: Request, exc: RequestValidationError) -> JSONResponse:
         if request.url.path != _GENERATE_PATH:
             return await request_validation_exception_handler(request, exc)
-        return _invalid_request_response(exc)
+        response, ids = _invalid_request_response(exc)
+        try:
+            request.app.state.telemetry.record_invalid_request(
+                request_id=ids.get("request_id"), run_id=ids.get("run_id")
+            )
+        except Exception as tel_exc:
+            logger.warning("telemetry call failed (%s)", type(tel_exc).__name__)
+        return JSONResponse(status_code=422, content=response.model_dump(mode="json"))
 
     return app
 
@@ -158,7 +181,18 @@ def _normalize_selector(value: str | None) -> str | None:
     return value.strip() or None
 
 
-def _invalid_request_response(exc: RequestValidationError) -> JSONResponse:
+def _default_telemetry() -> DirectorTelemetry:
+    """Telemetry from the environment; any failure degrades to no-op telemetry."""
+    try:
+        return setup_telemetry(TelemetrySettings.from_env())
+    except Exception as exc:
+        logger.warning("telemetry setup failed (%s); telemetry disabled", type(exc).__name__)
+        return DirectorTelemetry(enabled=False)
+
+
+def _invalid_request_response(
+    exc: RequestValidationError,
+) -> tuple[GenerationResponse, dict[str, Any]]:
     errors = exc.errors()
     types = {error.get("type") for error in errors}
     if "unsupported_contract_version" in types:
@@ -183,7 +217,7 @@ def _invalid_request_response(exc: RequestValidationError) -> JSONResponse:
         code=code,
         message=f"Invalid generation request: {shown}",
     )
-    return JSONResponse(status_code=422, content=response.model_dump(mode="json"))
+    return response, ids
 
 
 #: Production instance, served by ``make run-director`` (``dungeon_director.app:app``).

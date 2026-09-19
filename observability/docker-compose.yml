@@ -1,0 +1,77 @@
+# Local OpenLIT for the Dungeon Director (issue #11).
+#
+# Mirrors the official OpenLIT 2.1.0 docker-compose.yml: ClickHouse stores the
+# telemetry, and the OpenLIT container serves the UI on :3000 and embeds the
+# OpenTelemetry collector that receives OTLP on :4317 (gRPC) and :4318 (HTTP).
+# The three files under ./assets are the upstream 2.1.0 files, unmodified:
+# https://github.com/openlit/openlit/tree/openlit-2.1.0/assets
+#
+# Ports bind to 127.0.0.1 only: the ClickHouse password below is a well-known
+# local default, so nothing here should be reachable from the network.
+#
+#   docker compose -f observability/docker-compose.yml up -d
+name: dungeon-director-observability
+
+services:
+  clickhouse:
+    image: clickhouse/clickhouse-server:24.4.1
+    environment:
+      CLICKHOUSE_USER: ${OPENLIT_DB_USER:-default}
+      CLICKHOUSE_PASSWORD: ${OPENLIT_DB_PASSWORD:-OPENLIT}
+      CLICKHOUSE_DATABASE: ${OPENLIT_DB_NAME:-openlit}
+      # Creates the OTel tables the collector's ClickHouse exporter writes to.
+      CLICKHOUSE_ALWAYS_RUN_INITDB_SCRIPTS: "true"
+    volumes:
+      - clickhouse-data:/var/lib/clickhouse
+      - ./assets/clickhouse-config.xml:/etc/clickhouse-server/config.d/custom-config.xml:ro
+      - ./assets/clickhouse-init.sh:/docker-entrypoint-initdb.d/init.sh:ro
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - clickhouse-client --user=$${CLICKHOUSE_USER} --password=$${CLICKHOUSE_PASSWORD} --query='SELECT 1' || exit 1
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 100s
+    restart: unless-stopped
+
+  openlit:
+    image: ghcr.io/openlit/openlit:2.1.0
+    environment:
+      # OpenLIT's own anonymous product analytics. Off by default here; set
+      # OPENLIT_TELEMETRY_ENABLED=true to opt in. Unrelated to the director's
+      # OTLP export.
+      TELEMETRY_ENABLED: ${OPENLIT_TELEMETRY_ENABLED:-false}
+      INIT_DB_HOST: clickhouse
+      INIT_DB_PORT: "8123"
+      INIT_DB_DATABASE: ${OPENLIT_DB_NAME:-openlit}
+      INIT_DB_USERNAME: ${OPENLIT_DB_USER:-default}
+      INIT_DB_PASSWORD: ${OPENLIT_DB_PASSWORD:-OPENLIT}
+      SQLITE_DATABASE_URL: file:/app/client/data/data.db
+      PORT: "3000"
+      DOCKER_PORT: "3000"
+    ports:
+      - "127.0.0.1:3000:3000" # UI
+      - "127.0.0.1:4317:4317" # OTLP gRPC receiver
+      - "127.0.0.1:4318:4318" # OTLP HTTP receiver (what the director uses)
+    depends_on:
+      clickhouse:
+        condition: service_healthy
+    volumes:
+      - openlit-data:/app/client/data
+      - ./assets/otel-collector-config.yaml:/etc/otel/otel-collector-config.yaml:ro
+    healthcheck:
+      test:
+        - CMD
+        - node
+        - -e
+        - fetch('http://localhost:3000').then(r=>{process.exit(r.ok?0:1)}).catch(()=>process.exit(1))
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 30s
+    restart: unless-stopped
+
+volumes:
+  clickhouse-data:
+  openlit-data:

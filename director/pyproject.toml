@@ -11,6 +11,11 @@ dependencies = [
     "fastapi>=0.110",
     "httpx>=0.27",
     "jsonschema>=4.18",
+    # The OpenTelemetry API, SDK and OTLP exporter release in lockstep; all three
+    # are pinned to the release the telemetry tests run against.
+    "opentelemetry-api==1.44.0",
+    "opentelemetry-exporter-otlp-proto-http==1.44.0",
+    "opentelemetry-sdk==1.44.0",
     "pydantic>=2.6,<3",
     "uvicorn>=0.29",
 ]
