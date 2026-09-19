@@ -23,11 +23,32 @@ def registry_with(*providers: FakeProvider) -> ProviderRegistry:
     return registry
 
 
-def test_default_registry_offers_only_the_offline_rules_provider():
+def test_default_registry_offers_rules_plus_unconfigured_cloudflare_jev(monkeypatch):
+    for name in ("CLOUDFLARE_ACCOUNT_ID", "CLOUDFLARE_API_TOKEN"):
+        monkeypatch.delenv(name, raising=False)
     registry = default_registry()
 
-    assert [d.id for d in registry.describe()] == ["rules-baseline"]
-    assert registry.describe()[0].available is True
+    described = {d.id: d for d in registry.describe()}
+
+    assert set(described) == {"rules-baseline", "cloudflare-jev"}
+    assert described["rules-baseline"].available is True
+    assert described["cloudflare-jev"].available is False
+    assert registry.select("rules-baseline", None).model == "builtin-v1"
+
+
+def test_invalid_optional_jev_environment_does_not_break_the_offline_default(monkeypatch, caplog):
+    monkeypatch.setenv("CLOUDFLARE_ACCOUNT_ID", "invalid account/id")
+    monkeypatch.setenv("CLOUDFLARE_API_TOKEN", "secret-that-must-not-be-logged")
+
+    with caplog.at_level(logging.WARNING):
+        registry = default_registry()
+
+    described = {item.id: item for item in registry.describe()}
+    assert registry.select("rules-baseline", None).model == "builtin-v1"
+    assert described["cloudflare-jev"].available is False
+    logged = "\n".join(record.getMessage() for record in caplog.records)
+    assert "secret-that-must-not-be-logged" not in logged
+    assert "invalid account/id" not in logged
 
 
 def test_select_returns_provider_and_its_default_model():
@@ -178,3 +199,49 @@ def test_cancellation_and_interrupts_are_not_swallowed_by_the_availability_check
         registry.describe()
     with pytest.raises(type(cancel)):
         registry.select("broken", None)
+
+
+class ClosingProvider(FakeProvider):
+    def __init__(
+        self,
+        provider_id: str,
+        *,
+        close_error: BaseException | None = None,
+    ) -> None:
+        super().__init__(provider_id)
+        self.close_error = close_error
+        self.close_calls = 0
+
+    async def aclose(self) -> None:
+        self.close_calls += 1
+        if self.close_error is not None:
+            raise self.close_error
+
+
+def test_registry_close_continues_after_a_provider_failure_without_logging_secret(caplog):
+    secret = "close-error-secret"
+    broken = ClosingProvider("broken-close", close_error=RuntimeError(secret))
+    healthy = ClosingProvider("healthy-close")
+    registry = registry_with(broken, healthy)
+
+    with caplog.at_level(logging.ERROR):
+        asyncio.run(registry.aclose())
+
+    assert broken.close_calls == 1
+    assert healthy.close_calls == 1
+    logged = "\n".join(record.getMessage() for record in caplog.records)
+    assert "RuntimeError" in logged
+    assert secret not in logged
+    assert not any(record.exc_info for record in caplog.records)
+
+
+def test_registry_close_does_not_swallow_cancellation():
+    cancelled = ClosingProvider("cancelled-close", close_error=asyncio.CancelledError())
+    untouched = ClosingProvider("untouched-close")
+    registry = registry_with(cancelled, untouched)
+
+    with pytest.raises(asyncio.CancelledError):
+        asyncio.run(registry.aclose())
+
+    assert cancelled.close_calls == 1
+    assert untouched.close_calls == 0

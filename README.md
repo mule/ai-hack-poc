@@ -16,7 +16,7 @@ Early bootstrap. What exists today and what does not:
 | Component | Directory | State |
 |-----------|-----------|-------|
 | Godot 2D client (desktop + Android) | `game/` | Shell delivered by issue #4, developed alongside this one. Not part of the bootstrap files. |
-| Director service (FastAPI) | `director/` | Issue #5: `POST /v1/generate`, `GET /v1/config`, `GET /health`; provider registry; offline rules baseline as default. No external providers yet. |
+| Director service (FastAPI) | `director/` | Issue #5: `POST /v1/generate`, `GET /v1/config`, `GET /health`; provider registry; offline rules baseline as default. Issue #8 adds the `cloudflare-jev` adapter (see `director/docs/cloudflare-jev.md`; live calls need credentials). |
 | Shared plan contract (`RoomPlan`) | `director/dungeon_director/contracts.py` | Owned by issue #3. |
 | Benchmarks / replay | `benchmarks/` | Placeholder README only. |
 | Observability | `observability/` | Placeholder README only. |
@@ -43,8 +43,13 @@ Early bootstrap. What exists today and what does not:
                                                       └─────────────────────┘
 ```
 
-(The providers shown are the planned initial set from the epic; only the rules
-baseline is implemented. The others plug in through the same provider interface.)
+(The providers shown are the planned initial set from the epic; the rules
+baseline and the Cloudflare Jev adapter are implemented. Jev is TypeSafe's
+non-generative decision model, reached through Cloudflare's
+`/accounts/<id>/ai/run` REST endpoint: one call asks a fixed set of typed
+choice/score/yes-no questions about the dungeon state, and adapter code
+composes the calibrated answers into a `RoomPlan`. The others plug in through
+the same provider interface.)
 
 ### Provider-independent, semantic plans
 
@@ -238,6 +243,17 @@ deterministic: the same state and frontier always yield the same room, its
 depth equals the request depth, and it always has an exit back to the frontier
 it was generated from.
 
+The Cloudflare Jev provider (`cloudflare-jev` / `typesafe/jev`, issue #8)
+asks Jev typed questions (room archetype, size, danger, densities, secret,
+exits, atmosphere) in a single call and composes the calibrated answers into
+a canonical room. It is registered always but `available: false` until
+`CLOUDFLARE_ACCOUNT_ID` and `CLOUDFLARE_API_TOKEN` are set server-side;
+without them the offline default is untouched. Its verified API contract,
+decision rubric, error mapping and sanitized samples are documented in
+`director/docs/cloudflare-jev.md`; live integration tests live in
+`director/tests/test_cloudflare_jev_live.py` and skip unless explicitly opted
+in with `RUN_LIVE_JEV=1` and credentials.
+
 Adding a provider means subclassing `DungeonDirectorProvider`
 (`director/dungeon_director/providers.py`) and registering it in
 `default_registry()`; nothing in the game changes.
@@ -301,13 +317,19 @@ load; its contents belong to the game shell.
   `DIRECTOR_DEFAULT_MODEL` (default: the provider's own default) and
   `DIRECTOR_TIMEOUT_SECONDS` (default `10`, must be > 0 and <= 300) from the
   **process environment**. It does not load `.env` itself: export the variables
-  or use your shell or a tool such as `direnv`. Invalid values, or a default
-  provider that is unknown or unavailable, stop the service at startup with a
-  clear message.
-- The provider credential and OTLP variables in `.env.example` are placeholders
-  for the external-provider and telemetry issues; nothing reads them yet. When
-  they do, credentials stay inside the provider adapter and never appear in
-  `/v1/config`, responses or error messages.
+  or use your shell or a tool such as `direnv`. Invalid director settings, or a
+  default provider that is unknown or unavailable, stop the service at startup
+  with a clear message.
+- The `cloudflare-jev` provider reads `CLOUDFLARE_ACCOUNT_ID`,
+  `CLOUDFLARE_API_TOKEN`, `CLOUDFLARE_JEV_MODEL` (default `typesafe/jev`) and
+  `CLOUDFLARE_JEV_API_BASE_URL` (default `https://api.cloudflare.com/client/v4`)
+  from the same process environment. Custom remote API roots must use HTTPS;
+  HTTP is accepted only for loopback test servers. Credentials stay inside the adapter:
+  they never appear in `/v1/config`, responses, error messages, logs or test
+  output. Missing or invalid optional Jev configuration leaves that provider
+  `available: false`; choosing it as the default still stops startup.
+- The Groq/Cerebras keys and the OTLP endpoint in `.env.example` remain
+  placeholders for the remaining provider and telemetry issues.
 - Provider and model selection is configuration-driven: the game names a
   provider/model by stable id in the query string, never provider-specific logic.
 
@@ -318,8 +340,12 @@ game/           Godot 2D client (issue #4)
 director/       FastAPI director service
   dungeon_director/   Python package: app.py (HTTP + app factory), service.py
                       (timeout/validation/failure policy), providers.py,
-                      registry.py, rules.py (baseline), settings.py, contracts.py
-  tests/
+                      registry.py, rules.py (baseline), cloudflare_jev.py
+                      (TypeSafe Jev via Cloudflare, issue #8), settings.py,
+                      contracts.py
+  docs/               Provider developer docs (cloudflare-jev.md)
+  tests/              Offline tests + fixtures (incl. sanitized Jev samples)
+                 and live tests (test_cloudflare_jev_live.py, credential-gated)
 benchmarks/     Replay/benchmark tooling (placeholder)
 observability/  OpenTelemetry/OpenLIT config (placeholder)
 Makefile        Local dev commands

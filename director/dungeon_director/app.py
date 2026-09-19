@@ -17,10 +17,19 @@ unavailable, 504 timeout).
 ``create_app`` builds a fully isolated app (own registry, settings and
 service), which is what tests use to inject fake providers. The module-level
 ``app`` is the production instance served by ``make run-director``.
+
+Lifecycle ownership: the app closes the registry it serves — including an
+**injected** one — when its lifespan shuts down (uvicorn exit, TestClient
+context exit). Callers that want to keep using a registry after the app that
+served it has shut down must not pass that registry to ``create_app``;
+provider ``aclose`` implementations must tolerate being closed exactly once
+per registry sweep (the Jev provider's is idempotent).
 """
 
 from __future__ import annotations
 
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from typing import Annotated, Any
 
 from fastapi import Depends, FastAPI, Query, Request
@@ -62,13 +71,26 @@ def create_app(
     ``settings`` defaults to :meth:`DirectorSettings.from_env` and ``registry``
     to :func:`default_registry`. Raises ``DirectorConfigError`` if the default
     provider/model is not usable, so misconfiguration fails at startup.
+
+    The returned app closes ``registry``'s providers (any that expose
+    ``aclose``) on lifespan shutdown — including an injected registry: passing
+    one in hands its shutdown to the app. Startup behaviour is unchanged and
+    nothing is closed while the app is running.
     """
     settings = settings if settings is not None else DirectorSettings.from_env()
     registry = registry if registry is not None else default_registry()
     service = DirectorService(registry, settings)
     default_model = registry.select(settings.default_provider, settings.default_model).model
 
-    app = FastAPI(title="Dungeon Director")
+    @asynccontextmanager
+    async def lifespan(app: FastAPI) -> AsyncIterator[None]:
+        try:
+            yield
+        finally:
+            # Shutdown is best-effort per provider; cancellation propagates.
+            await registry.aclose()
+
+    app = FastAPI(title="Dungeon Director", lifespan=lifespan)
     app.state.service = service
 
     @app.get("/health")

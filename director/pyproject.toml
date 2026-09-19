@@ -9,6 +9,7 @@ description = "Provider-independent dungeon director service for the ai-hack-poc
 requires-python = ">=3.11"
 dependencies = [
     "fastapi>=0.110",
+    "httpx>=0.27",
     "pydantic>=2.6,<3",
     "uvicorn>=0.29",
 ]
@@ -26,6 +27,9 @@ include = ["dungeon_director*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+markers = [
+    "live: makes real (billable) Cloudflare Jev calls; requires RUN_LIVE_JEV=1 and credentials",
+]
 
 [tool.ruff]
 line-length = 100

@@ -3,7 +3,10 @@
 The registry is the only place providers are looked up. It hands the service a
 provider plus a concrete model, and hands the API a description that contains
 identifiers and availability flags only: no credentials, endpoints or
-operator-facing availability reasons.
+operator-facing availability reasons. It also owns provider shutdown:
+:meth:`ProviderRegistry.aclose` closes every registered provider that exposes
+an ``aclose`` coroutine (duck-typed), exactly once per provider, so async
+resources such as HTTP clients are released deterministically.
 """
 
 from __future__ import annotations
@@ -14,6 +17,7 @@ from dataclasses import dataclass
 
 from pydantic import BaseModel, ConfigDict
 
+from dungeon_director.cloudflare_jev import CloudflareJevProvider
 from dungeon_director.errors import (
     DirectorConfigError,
     ProviderSelectionError,
@@ -137,9 +141,58 @@ class ProviderRegistry:
             for provider in self._providers.values()
         ]
 
+    async def aclose(self) -> None:
+        """Close every registered provider that exposes ``aclose``, once each.
+
+        Shutdown must be as defensive as availability checks: a misbehaving
+        closer degrades to a log line for that one provider while the rest are
+        still closed. Only ``Exception`` is caught: cancellation and interrupts
+        (``CancelledError``/``KeyboardInterrupt`` are ``BaseException``) are
+        not caught here and propagate immediately, and providers after the
+        cancelled one are *not* closed. Logged failures carry the provider id
+        and the exception *type* only: close errors and tracebacks can echo
+        credentials, same as every other adapter-controlled text.
+        """
+        closed_ids: set[int] = set()
+        for provider_id, provider in self._providers.items():
+            identity = id(provider)
+            if identity in closed_ids:
+                continue
+            closed_ids.add(identity)
+            closer = getattr(provider, "aclose", None)
+            if not callable(closer):
+                continue
+            try:
+                await closer()
+            except Exception as exc:
+                # Type only: exception text and tracebacks can carry credentials.
+                logger.error(
+                    "aclose for provider %s failed: %s (remaining providers still closed)",
+                    provider_id,
+                    type(exc).__name__,
+                )
+
 
 def default_registry() -> ProviderRegistry:
-    """The registry the service starts with: the offline rules baseline only."""
+    """The registry the service starts with.
+
+    The offline rules baseline is always available. The Cloudflare Jev
+    adapter is always registered too, but reports itself unavailable until
+    ``CLOUDFLARE_ACCOUNT_ID`` and ``CLOUDFLARE_API_TOKEN`` are configured, so
+    a checkout without credentials keeps working with the offline default.
+    """
     registry = ProviderRegistry()
     registry.register(RulesProvider())
+    try:
+        registry.register(CloudflareJevProvider.from_env())
+    except DirectorConfigError as exc:
+        # Jev is optional while rules-baseline is the default. A typo in its
+        # environment must not take the offline service down; selecting Jev
+        # still fails as unavailable. Log only the exception type because
+        # configuration text can contain credential material.
+        logger.warning(
+            "invalid optional cloudflare-jev configuration; provider disabled (%s)",
+            type(exc).__name__,
+        )
+        registry.register(CloudflareJevProvider.from_env({}))
     return registry
