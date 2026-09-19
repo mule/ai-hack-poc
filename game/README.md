@@ -44,9 +44,24 @@ Run the scene smoke test verifying node composition, input handlers, focus modes
 godot --headless --path game -s res://tests/test_scene_smoke.gd --log-file /tmp/godot_smoke_test.log
 ```
 
+### Running Room Generator Tests
+
+Run the headless deterministic room generator test suite:
+```bash
+godot --headless --path game -s res://tests/test_room_generator.gd --log-file /tmp/godot_room_generator_test.log
+```
+
 The test suite validates:
-1. **Collision mechanics**: Walls block movement, player coordinates remain unchanged.
-2. **Door mechanics**: Closed doors block step and open on interaction; subsequent step navigates through open door.
-3. **Loot pickup mechanics**: Stepping onto items collects them, restores player HP or buffs attack power, and removes items from the floor.
-4. **Combat and damage mechanics**: Player attacks enemies, enemies retaliate on player turn, enemy dies upon reaching 0 HP, and defeated enemy tile becomes passable.
-5. **Death and restart mechanics**: Taking fatal damage marks player dead and halts actions; restarting resets HP, position, and spawns.
+1. **Deterministic reproducibility**: Same RoomPlan + seed produces bit-for-bit identical tile layout, entity placements, and secret positions.
+2. **Contract fixture compatibility**: Validates against canonical RoomPlan contract schemas and fixtures.
+3. **Room sizes & archetypes**: Supports all contract sizes (`tiny`, `small`, `medium`, `large`, `huge`) and room types (`corridor`, `cavern`, `vault`, `shrine`, `shop`, `treasure`, `entrance`, `stairs_down`, `stairs_up`, etc.).
+4. **Collision & spawn safety**: Player, enemies, loot, and secrets never spawn inside walls or doors; enemies never spawn on top of the player.
+5. **Connectivity & traversability**: All floor tiles and exits connect in a single traversable component via BFS validation.
+6. **Plan normalization**: Odd, out-of-bound, or malformed plan parameters are safely clamped/normalized with explicit diagnostic logs.
+
+### Running Headless Contract Tests
+
+Run the contract fixture validation test suite:
+```bash
+godot --headless --path game -s res://tests/test_contracts.gd
+```

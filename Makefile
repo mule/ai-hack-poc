@@ -56,7 +56,7 @@ godot-check: ## Headless-load the Godot project; fails on script parse/runtime e
 	@test -f game/project.godot || { echo "game/project.godot not found: the Godot shell is not in this checkout yet"; exit 1; }
 	@$(call godot_run,--quit-after 10,$(GODOT_LOG_DIR)/godot-load.log)
 
-godot-test: ## Run Godot tests headlessly (mechanics, + shared-contract and scene-smoke if present)
+godot-test: ## Run Godot tests headlessly (mechanics plus optional contract, generator, and smoke suites)
 	@test -f game/project.godot || { echo "game/project.godot not found: the Godot shell is not in this checkout yet"; exit 1; }
 	@test -f game/tests/test_mechanics.gd || { echo "game/tests/test_mechanics.gd not found"; exit 1; }
 	@$(call godot_run,-s res://tests/test_mechanics.gd,$(GODOT_LOG_DIR)/godot-mechanics.log)
@@ -65,6 +65,12 @@ godot-test: ## Run Godot tests headlessly (mechanics, + shared-contract and scen
 		$(call godot_run,-s res://tests/test_contracts.gd,$(GODOT_LOG_DIR)/godot-contracts.log); \
 	else \
 		echo "game/tests/test_contracts.gd not present: skipping shared-contract test"; \
+	fi
+	@if test -f game/tests/test_room_generator.gd; then \
+		echo "Running room-generator test"; \
+		$(call godot_run,-s res://tests/test_room_generator.gd,$(GODOT_LOG_DIR)/godot-room-generator.log); \
+	else \
+		echo "game/tests/test_room_generator.gd not present: skipping room-generator test"; \
 	fi
 	@if test -f game/tests/test_scene_smoke.gd; then \
 		echo "Running scene smoke test"; \
