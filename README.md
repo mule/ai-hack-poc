@@ -79,10 +79,83 @@ deliberately does not duplicate them.
 - Python 3.11 or newer, with the `venv` module (on Debian/Ubuntu:
   `sudo apt install python3-venv`)
 - `make`
-- [Godot](https://godotengine.org/) 4.x to open and run the game (the shell
-  project pins the exact version; not needed to run the director)
-- Android export (later): Android SDK and Godot export templates, covered by the
-  platform-build issue
+- [Godot](https://godotengine.org/) 4.x (`4.7.1.stable`) to open, run, or export the game (not needed to run the director)
+- Linux desktop export: Godot 4.7.1 matching export templates (`linux_debug.x86_64`)
+- Android export:
+  - Godot 4.7.1 matching export templates (`android_debug.apk`)
+  - OpenJDK 17 (`/usr/lib/jvm/java-17-openjdk-amd64` or `$JAVA_HOME`)
+  - Android SDK with platform-tools, build-tools 35+ (e.g. 35.0.0 / 36.0.0), and platform android-35+
+  - Local debug keystore (`debug.keystore`) generated via `keytool` and configured in Godot editor settings
+
+## Platform exports (Linux Desktop & Android Debug)
+
+Preset definitions live in [`game/export_presets.cfg`](game/export_presets.cfg). Presets are credential-free and contain no machine-local paths.
+
+### Export commands
+
+Using `make`:
+```sh
+make export-linux GODOT=/path/to/godot
+make export-android GODOT=/path/to/godot
+```
+
+Or using Godot directly:
+```sh
+mkdir -p game/builds/linux game/builds/android
+godot --headless --path game --export-debug "Linux Desktop" builds/linux/ai-hack-poc.x86_64
+godot --headless --path game --export-debug "Android Debug" builds/android/ai-hack-poc-debug.apk
+```
+
+### Generated artifacts
+
+- **Linux Desktop**: `game/builds/linux/ai-hack-poc.x86_64`, `ai-hack-poc.pck`, and launcher script `ai-hack-poc.sh`. Packaged by `make export-linux` into `ai-hack-poc-linux-x86_64.tar.gz` (preserving executable bits).
+- **Android Debug**: `game/builds/android/ai-hack-poc-debug.apk` (and `.apk.idsig`).
+
+Generated build directories (`game/builds/`) are git-ignored and never committed.
+
+### Local Android debug keystore setup
+
+Godot expects the debug keystore and SDK locations in its editor settings (`~/.config/godot/editor_settings-4.7.tres`). To generate a local debug keystore:
+
+```sh
+mkdir -p ~/.local/share/godot/keystores
+keytool -genkeypair -v -keystore ~/.local/share/godot/keystores/debug.keystore \
+  -alias androiddebugkey -keyalg RSA -keysize 2048 -validity 10000 \
+  -dname "CN=Android Debug,O=Android,C=US" -storepass android -keypass android
+```
+
+Configure Godot editor settings (`Editor -> Editor Settings -> Export -> Android` in the GUI, or in `editor_settings-4.7.tres`):
+- **Debug Keystore**: `~/.local/share/godot/keystores/debug.keystore`
+- **Debug Keystore User**: `androiddebugkey`
+- **Debug Keystore Pass**: `android`
+- **Java SDK Path**: `/usr/lib/jvm/java-17-openjdk-amd64` (or `$JAVA_HOME`)
+- **Android SDK Path**: `/home/<user>/Android/Sdk` (or `$ANDROID_HOME`)
+
+Alternatively, export signing credentials can be supplied via environment variables without editing settings:
+- `GODOT_ANDROID_KEYSTORE_DEBUG_PATH`
+- `GODOT_ANDROID_KEYSTORE_DEBUG_USER`
+- `GODOT_ANDROID_KEYSTORE_DEBUG_PASSWORD`
+
+Signing keys and credentials are never stored in `game/export_presets.cfg` or committed to git.
+
+## Continuous Integration & Build Artifacts
+
+GitHub Actions workflow [`.github/workflows/ci.yml`](.github/workflows/ci.yml) runs automated checks and exports:
+
+| Job | Trigger | What it does |
+|---|---|---|
+| `backend-checks` | Push, Pull Request, `workflow_dispatch` | Sets up Python 3.11 with cached pip dependencies and runs `make setup && make check`. |
+| `godot-checks` | Push, Pull Request, `workflow_dispatch` | Downloads and verifies Godot 4.7.1-stable against official SHA-512 sums, running headless load check (`make godot-check`) and test suites (`make godot-test`). |
+| `build-artifacts` | Push, Pull Request, `workflow_dispatch` | Sets up Java 17 and Android SDK 35, verifies Godot engine & export templates against official SHA-512 checksums, and compiles Linux and Android debug targets. |
+
+### Downloadable Artifacts
+
+When runs succeed on `main` or via manual `workflow_dispatch`, downloadable build artifacts are uploaded:
+- **`linux-desktop-build`**: Contains `ai-hack-poc-linux-x86_64.tar.gz`. Unpack with `tar -xzf ai-hack-poc-linux-x86_64.tar.gz` and run `./ai-hack-poc.sh` or `./ai-hack-poc.x86_64`.
+- **`android-debug-apk`**: Contains `ai-hack-poc-debug.apk`.
+
+> [!WARNING]
+> **Ephemeral CI Debug Keystore Caveat**: CI builds generate an ephemeral debug key for signing each run. Android OS verifies signature consistency during package upgrades. If you have previously installed an APK from a different CI run or a local build on your test device, Android will reject the installation with `INSTALL_FAILED_UPDATE_INCOMPATIBLE`. You **must uninstall the previous version from the device** before installing an APK from another CI run (`adb uninstall com.mule.aihackpoc`).
 
 ## Setup and run
 

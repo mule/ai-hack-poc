@@ -65,3 +65,28 @@ Run the contract fixture validation test suite:
 ```bash
 godot --headless --path game -s res://tests/test_contracts.gd
 ```
+
+## Platform Exports
+
+Preset configurations are managed in [`export_presets.cfg`](export_presets.cfg).
+
+### Exporting Linux Desktop
+```bash
+make -C .. export-linux GODOT=/path/to/godot
+# Or:
+mkdir -p builds/linux
+godot --headless --path . --export-debug "Linux Desktop" builds/linux/ai-hack-poc.x86_64
+tar -czf builds/linux/ai-hack-poc-linux-x86_64.tar.gz -C builds/linux ai-hack-poc.x86_64 ai-hack-poc.pck ai-hack-poc.sh
+```
+
+### Exporting Android Debug APK
+Requires Godot Android export templates, OpenJDK 17, Android SDK (build-tools 35+, platform 35+), and debug keystore configured in editor settings or passed via environment variables (`GODOT_ANDROID_KEYSTORE_DEBUG_PATH`, `GODOT_ANDROID_KEYSTORE_DEBUG_USER`, `GODOT_ANDROID_KEYSTORE_DEBUG_PASSWORD`).
+```bash
+make -C .. export-android GODOT=/path/to/godot
+# Or:
+mkdir -p builds/android
+godot --headless --path . --export-debug "Android Debug" builds/android/ai-hack-poc-debug.apk
+```
+
+> [!NOTE]
+> CI builds use an ephemeral debug key. To install a CI-built APK on a device that already has a local build or a prior CI APK installed, uninstall the previous package first (`adb uninstall com.mule.aihackpoc`).

@@ -22,7 +22,7 @@ exit $$rc
 endef
 
 .DEFAULT_GOAL := help
-.PHONY: help need-venv setup run-director test lint format check godot-check godot-test godot-lint clean
+.PHONY: help need-venv setup run-director test lint format check godot-check godot-test godot-lint export-linux export-android clean
 
 help: ## List available targets
 	@grep -E '^[a-z-]+:.*## ' $(MAKEFILE_LIST) | awk -F':.*## ' '{printf "  %-14s %s\n", $$1, $$2}'
@@ -84,6 +84,17 @@ godot-lint: ## Lint GDScript with gdlint (pip install gdtoolkit)
 	@test -d game || { echo "game/ not found: the Godot shell is not in this checkout yet"; exit 1; }
 	gdlint game
 
-clean: ## Remove the director virtualenv, Python caches and build output
-	rm -rf $(VENV) director/.pytest_cache director/.ruff_cache director/*.egg-info director/build director/dist
+export-linux: ## Export headless Linux x86_64 debug build and package tar.gz
+	@test -f game/project.godot || { echo "game/project.godot not found: the Godot shell is not in this checkout yet"; exit 1; }
+	mkdir -p game/builds/linux
+	$(GODOT) --headless --path game --export-debug "Linux Desktop" builds/linux/ai-hack-poc.x86_64
+	tar -czf game/builds/linux/ai-hack-poc-linux-x86_64.tar.gz -C game/builds/linux ai-hack-poc.x86_64 ai-hack-poc.pck ai-hack-poc.sh
+
+export-android: ## Export headless Android debug APK
+	@test -f game/project.godot || { echo "game/project.godot not found: the Godot shell is not in this checkout yet"; exit 1; }
+	mkdir -p game/builds/android
+	$(GODOT) --headless --path game --export-debug "Android Debug" builds/android/ai-hack-poc-debug.apk
+
+clean: ## Remove the director virtualenv, Python caches, and build output
+	rm -rf $(VENV) director/.pytest_cache director/.ruff_cache director/*.egg-info director/build director/dist game/builds
 	find director -type d -name __pycache__ -prune -exec rm -rf {} +
