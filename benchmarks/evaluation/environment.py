@@ -4,7 +4,7 @@ Configuration is read from the same ``*Config.from_env`` objects the providers r
 with, so what is recorded is what was used. Secrets never enter the record: a
 field is dropped when the config marks it ``repr=False`` (the repository's own
 convention for credentials) or when its name looks like one, and URLs are cut
-down to scheme, host and path.
+down to their origin. Custom URL paths can contain tenant-specific secrets.
 """
 
 from __future__ import annotations
@@ -112,7 +112,15 @@ def check_usable(selection: Selection) -> None:
 
 def _safe_url(value: str) -> str:
     parts = urlsplit(value)
-    return f"{parts.scheme}://{parts.hostname or ''}{parts.path}"
+    host = parts.hostname or ""
+    if ":" in host and not host.startswith("["):
+        host = f"[{host}]"
+    try:
+        parsed_port = parts.port
+    except ValueError:
+        parsed_port = None
+    port = f":{parsed_port}" if parsed_port is not None else ""
+    return f"{parts.scheme}://{host}{port}"
 
 
 def describe_config(config: Any) -> dict[str, Any]:

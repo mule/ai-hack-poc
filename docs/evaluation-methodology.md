@@ -169,7 +169,7 @@ Every run writes an evidence bundle to `evaluation-output/<UTC stamp>/` (git-ign
 
 **Provider, model, version and configuration.** Configuration is read from the
 same `*Config.from_env` objects the providers run with, so what is recorded is
-what was used: model id, API root (scheme, host and path only), reasoning
+what was used: model id, API origin (scheme, host and port only), reasoning
 effort, output-token cap, and so on. Credentials are never recorded: a field is
 withheld when its config marks it `repr=False` or its name is a key/token/secret/
 account id, and the record lists the *names* withheld plus whether a credential
@@ -242,12 +242,14 @@ be smuggled in as an observation. The template is
 summarizer (`benchmarks/fixtures/sample_replay_results.json` and `.jsonl`, issue
 #15) contain **synthetic, illustrative values for tests and demos; they are not
 provider measurements** and must not be quoted as benchmark results. The
-evidence path cannot present them as such: the report tooling only accepts a
-bundle written by `benchmarks.evaluation run`, and `verify` requires the results
-to match the bundle's own corpus copy (every request id, every iteration, exactly
-once), the manifest's file digests, and the recorded provider selections. A
-results file from anywhere else, or edited afterwards, fails verification and no
-report is produced. No `make eval-*` target defaults to those fixtures.
+evidence path cannot accidentally present them as such: `verify` requires results
+to match the bundle's own corpus copy (every request id, iteration and seeded call
+position exactly once), file digests, result headers, protocol selections,
+environment records and the warm-up policy. A copied fixture or an edited raw file
+therefore fails verification and no report is produced. This is an internal
+consistency check, not cryptographic proof that a hosted call happened; establish
+authenticity externally if the producer is not trusted. No `make eval-*` target
+defaults to those fixtures.
 
 ## Running it
 

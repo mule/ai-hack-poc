@@ -223,9 +223,11 @@ def test_config_capture_withholds_credentials_but_keeps_tuning():
     assert described["credentials_present"] is True
     assert SECRET not in json.dumps(described)
     assert described["fields"]["max_completion_tokens"] == config.max_completion_tokens
-    assert described["fields"]["api_base_url"] == "https://api.groq.com/openai/v1"
-    # the config classes already refuse credentialed URLs; capture strips them anyway
-    assert _safe_url("https://user:pw@host.example/v1?x=1#f") == "https://host.example/v1"
+    assert described["fields"]["api_base_url"] == "https://api.groq.com"
+    # Capture strips credentials, queries, fragments, and potentially secret paths.
+    assert _safe_url("https://user:pw@host.example:8443/tenant/key?x=1#f") == (
+        "https://host.example:8443"
+    )
 
 
 def test_selection_uses_environment_model_and_explicit_override():
@@ -414,6 +416,60 @@ def test_verify_detects_a_plan_digest_that_does_not_reproduce(bundle_copy):
     manifest["raw_files"]["results.json"]["sha256"] = sha256_file(results)
     manifest_path.write_text(json.dumps(manifest))
     assert any("expected plan digest" in p for p in verify_bundle(bundle_copy))
+
+
+@pytest.mark.parametrize(
+    ("file_name", "replacement", "expected"),
+    [
+        ("manifest.json", [], "JSON object"),
+        ("results.json", {"results": ["not-a-row"]}, "list of objects"),
+        ("warmup.jsonl", "[]\n", "JSON object"),
+    ],
+)
+def test_verify_rejects_malformed_bundle_shapes_without_a_traceback(
+    bundle_copy, file_name, replacement, expected
+):
+    path = bundle_copy / file_name
+    path.write_text(replacement if isinstance(replacement, str) else json.dumps(replacement))
+    problems = verify_bundle(bundle_copy)
+    assert problems and any(expected in problem for problem in problems)
+
+
+def test_verify_rejects_a_malformed_raw_file_entry_without_a_traceback(bundle_copy):
+    manifest_path = bundle_copy / "manifest.json"
+    manifest = json.loads(manifest_path.read_text())
+    manifest["raw_files"]["results.json"] = {}
+    manifest_path.write_text(json.dumps(manifest))
+    problems = verify_bundle(bundle_copy)
+    assert any("manifest sha256" in problem for problem in problems)
+
+
+def test_verify_enforces_cross_file_identity_warmup_and_seeded_order(bundle_copy):
+    protocol_path = bundle_copy / "protocol.json"
+    protocol = json.loads(protocol_path.read_text())
+    protocol["selections"][0]["model"] = "different-model"
+    protocol_path.write_text(json.dumps(protocol))
+
+    warmup_path = bundle_copy / "warmup.jsonl"
+    warmup = [json.loads(line) for line in warmup_path.read_text().splitlines()]
+    warmup[0]["request_id"], warmup[1]["request_id"] = (
+        warmup[1]["request_id"],
+        warmup[0]["request_id"],
+    )
+    warmup_path.write_text("".join(canonical_json(row) + "\n" for row in warmup))
+
+    manifest_path = bundle_copy / "manifest.json"
+    manifest = json.loads(manifest_path.read_text())
+    from benchmarks.evaluation.corpus import sha256_file
+
+    for name in ("protocol.json", "warmup.jsonl"):
+        manifest["raw_files"][name]["sha256"] = sha256_file(bundle_copy / name)
+        manifest["raw_files"][name]["bytes"] = (bundle_copy / name).stat().st_size
+    manifest_path.write_text(json.dumps(manifest))
+
+    problems = verify_bundle(bundle_copy)
+    assert any("protocol selections" in problem for problem in problems)
+    assert any("seeded warm-up" in problem for problem in problems)
 
 
 # --- cost -------------------------------------------------------------------
