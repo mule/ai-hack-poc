@@ -83,6 +83,9 @@ class ReplayItemResult:
     usage: dict[str, Any] | None = None
     room: dict[str, Any] | None = None
     provider_metadata: dict[str, Any] = field(default_factory=dict)
+    # Retries the provider reported for this decision (None = not reported). The
+    # director itself never retries, so this stays None unless a provider says so.
+    retry_count: int | None = None
     timestamp: str = field(
         default_factory=lambda: datetime.now(UTC).isoformat().replace("+00:00", "Z")
     )
@@ -102,6 +105,7 @@ class ReplayItemResult:
             "usage": self.usage,
             "room": self.room,
             "provider_metadata": self.provider_metadata,
+            "retry_count": self.retry_count,
             "timestamp": self.timestamp,
         }
 
@@ -148,6 +152,7 @@ class BenchmarkReport:
     iterations: int
     concurrency: int
     providers: list[ProviderSummary]
+    # Deprecated: providers replayed with several models are omitted; use `providers`.
     summary_by_provider: dict[str, dict[str, Any]]
     results: list[ReplayItemResult] = field(default_factory=list)
 
@@ -296,6 +301,15 @@ async def run_replay_item(
         else None
     )
     room_dict = resp.room.model_dump(mode="json") if resp.room else None
+    provider_metadata = dict(resp.metadata.provider_metadata or {})
+    reported_retries = provider_metadata.get("retry_count")
+    retry_count = (
+        reported_retries
+        if isinstance(reported_retries, int)
+        and not isinstance(reported_retries, bool)
+        and reported_retries >= 0
+        else None
+    )
 
     return ReplayItemResult(
         request_id=request.request_id,
@@ -310,7 +324,8 @@ async def run_replay_item(
         error_message=error_msg,
         usage=usage_dict,
         room=room_dict,
-        provider_metadata=dict(resp.metadata.provider_metadata or {}),
+        provider_metadata=provider_metadata,
+        retry_count=retry_count,
     )
 
 
@@ -410,7 +425,7 @@ def compute_provider_summary(
 async def run_benchmark(
     requests: list[GenerationRequest],
     providers: Sequence[str],
-    models: dict[str, str] | None = None,
+    models: dict[str, str | Sequence[str]] | None = None,
     *,
     service: DirectorService | None = None,
     registry: ProviderRegistry | None = None,
@@ -418,16 +433,20 @@ async def run_benchmark(
     concurrency: int = 1,
     input_name: str = "dataset.jsonl",
 ) -> BenchmarkReport:
-    """Run replay benchmark for the given requests across selected providers."""
+    """Run replay benchmark for the given requests across selected providers.
+
+    ``models`` maps a provider to one model or to several; every listed model is
+    replayed and summarized separately. A provider without an entry uses its default.
+    """
     owned_registry: ProviderRegistry | None = None
     if service is None:
         service, owned_registry = build_default_service()
     reg = registry or owned_registry
 
     try:
-        model_map = dict(DEFAULT_MODELS)
-        if models:
-            model_map.update(models)
+        model_map: dict[str, list[str]] = {prov: [mod] for prov, mod in DEFAULT_MODELS.items()}
+        for prov, selected in (models or {}).items():
+            model_map[prov] = [selected] if isinstance(selected, str) else list(selected)
 
         semaphore = asyncio.Semaphore(concurrency if concurrency > 0 else 1)
 
@@ -437,10 +456,10 @@ async def run_benchmark(
 
         tasks: list[asyncio.Task[ReplayItemResult]] = []
         for prov in providers:
-            mod = model_map.get(prov, DEFAULT_MODELS.get(prov, "default"))
-            for it in range(1, iterations + 1):
-                for req in requests:
-                    tasks.append(asyncio.create_task(worker(req, prov, mod, it)))
+            for mod in model_map.get(prov) or ["default"]:
+                for it in range(1, iterations + 1):
+                    for req in requests:
+                        tasks.append(asyncio.create_task(worker(req, prov, mod, it)))
 
         all_results: list[ReplayItemResult] = await asyncio.gather(*tasks)
 
@@ -450,11 +469,20 @@ async def run_benchmark(
             grouped[(res.provider, res.model)].append(res)
 
         summaries: list[ProviderSummary] = []
-        summary_by_provider: dict[str, dict[str, Any]] = {}
         for (prov, mod), items in grouped.items():
-            summary = compute_provider_summary(prov, mod, items)
-            summaries.append(summary)
-            summary_by_provider[prov] = summary.to_dict()
+            summaries.append(compute_provider_summary(prov, mod, items))
+
+        # Legacy view keyed by provider alone. It cannot hold two models of one
+        # provider, so such providers are left out rather than overwritten;
+        # `providers` (and benchmarks.summarize) always carry every provider/model.
+        models_per_provider: dict[str, int] = defaultdict(int)
+        for summary in summaries:
+            models_per_provider[summary.provider] += 1
+        summary_by_provider = {
+            summary.provider: summary.to_dict()
+            for summary in summaries
+            if models_per_provider[summary.provider] == 1
+        }
 
         now_iso = datetime.now(UTC).isoformat().replace("+00:00", "Z")
         return BenchmarkReport(
@@ -537,7 +565,10 @@ def build_arg_parser() -> argparse.ArgumentParser:
         "--models",
         "-m",
         nargs="*",
-        help="Custom models in 'provider:model' format (e.g. 'groq:openai/gpt-oss-120b').",
+        help=(
+            "Custom models in 'provider:model' format (e.g. 'groq:openai/gpt-oss-120b'). "
+            "Repeat a provider to replay several of its models."
+        ),
     )
     parser.add_argument(
         "--iterations",
@@ -582,13 +613,25 @@ def parse_model_overrides(model_args: list[str] | None) -> dict[str, str]:
     return models
 
 
+def parse_model_selections(model_args: list[str] | None) -> dict[str, list[str]]:
+    """Parse ``provider:model`` arguments, keeping every model listed for a provider."""
+    selections: dict[str, list[str]] = {}
+    for arg in model_args or []:
+        if ":" not in arg:
+            raise ValueError(f"invalid model override format {arg!r}; expected 'provider:model'")
+        prov, mod = (part.strip() for part in arg.split(":", 1))
+        if mod not in selections.setdefault(prov, []):
+            selections[prov].append(mod)
+    return selections
+
+
 async def main_async(args: argparse.Namespace) -> int:
     requests = load_dataset_requests(args.input)
     if not requests:
         print(f"Warning: no generation requests found in {args.input}", file=sys.stderr)
         return 0
 
-    model_overrides = parse_model_overrides(args.models)
+    model_overrides = parse_model_selections(args.models)
     service, registry = build_default_service(timeout_seconds=args.timeout)
 
     report = await run_benchmark(

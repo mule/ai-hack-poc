@@ -35,7 +35,13 @@ SIM_STAMP := $(shell date -u +%Y%m%dT%H%M%SZ)
 SIM_OUT   ?= $(CURDIR)/simulation-output/$(SIM_STAMP)
 SIM_ARGS  ?=
 
-.PHONY: help need-venv setup run-director test lint format check replay-benchmark godot-check godot-test godot-lint simulate export-linux export-android clean
+# Provider/model summary of replay results (issue #15). BENCH_REPORT takes one or
+# more .json/.jsonl files produced by `python -m benchmarks.replay --output`.
+BENCH_REPORT ?= benchmarks/fixtures/sample_replay_results.json
+BENCH_FORMAT ?= text
+BENCH_OUT    ?=
+
+.PHONY: help need-venv setup run-director test lint format check replay-benchmark benchmark-summary godot-check godot-test godot-lint simulate export-linux export-android clean
 
 help: ## List available targets
 	@grep -E '^[a-z-]+:.*## ' $(MAKEFILE_LIST) | awk -F':.*## ' '{printf "  %-14s %s\n", $$1, $$2}'
@@ -67,10 +73,13 @@ format: need-venv ## Auto-fix and format Python code (ruff)
 	$(VENV_BIN)/python -m ruff check --fix --config director/pyproject.toml benchmarks
 	$(VENV_BIN)/python -m ruff format --config director/pyproject.toml benchmarks
 
-check: lint test ## Python lint + tests (no Godot required)
+check: lint test ## Python lint + tests for director/ and benchmarks/ (no Godot required)
 
 replay-benchmark: need-venv ## Run replay benchmark against rules-baseline on sample fixture
 	$(VENV_BIN)/python -m benchmarks.replay --input benchmarks/fixtures/sample_run.jsonl --providers rules-baseline
+
+benchmark-summary: need-venv ## Summarize replay results per provider/model. BENCH_REPORT='a.json b.jsonl' BENCH_FORMAT=text|json|csv BENCH_OUT=file
+	@$(VENV_BIN)/python -m benchmarks.summarize --input $(BENCH_REPORT) --format $(BENCH_FORMAT) $(if $(BENCH_OUT),--output $(BENCH_OUT))
 
 godot-check: ## Headless-load the Godot project; fails on script parse/runtime errors in the log
 	@test -f game/project.godot || { echo "game/project.godot not found: the Godot shell is not in this checkout yet"; exit 1; }
