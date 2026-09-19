@@ -12,7 +12,6 @@ resources such as HTTP clients are released deterministically.
 from __future__ import annotations
 
 import logging
-import re
 from dataclasses import dataclass
 
 from pydantic import BaseModel, ConfigDict
@@ -25,16 +24,20 @@ from dungeon_director.errors import (
     SelectionReason,
 )
 from dungeon_director.groq import GroqProvider
-from dungeon_director.providers import DungeonDirectorProvider, ProviderAvailability
+from dungeon_director.providers import (
+    MODEL_ID_RE,
+    PROVIDER_ID_RE,
+    DungeonDirectorProvider,
+    ProviderAvailability,
+)
 from dungeon_director.rules import RulesProvider
 
 __all__ = ["ProviderDescriptor", "ProviderRegistry", "ProviderSelection", "default_registry"]
 
 logger = logging.getLogger(__name__)
 
-_PROVIDER_ID_RE = re.compile(r"^[a-z0-9][a-z0-9_.-]{0,63}$")
-#: Model ids follow each vendor's naming (``openai/gpt-oss-20b``, ``@cf/...``).
-_MODEL_ID_RE = re.compile(r"^[A-Za-z0-9@][A-Za-z0-9_.:/@-]{0,127}$")
+_PROVIDER_ID_RE = PROVIDER_ID_RE
+_MODEL_ID_RE = MODEL_ID_RE
 
 
 class ProviderDescriptor(BaseModel):
@@ -131,6 +134,16 @@ class ProviderRegistry:
                 f"Available models: {', '.join(provider.models)}.",
             )
         return ProviderSelection(provider=provider, model=chosen)
+
+    def is_registered(self, provider_id: str, model: str | None) -> bool:
+        """Whether this exact provider (and model, when given) is registered.
+
+        Ignores availability. Meant for bounding metric label values: an id
+        that comes from a request or from operator config is only safe to use
+        as a label when the registry vouches for it.
+        """
+        provider = self._providers.get(provider_id)
+        return provider is not None and (model is None or model in provider.models)
 
     def describe(self) -> list[ProviderDescriptor]:
         return [

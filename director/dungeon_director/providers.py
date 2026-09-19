@@ -8,6 +8,7 @@ failure handling and latency numbers stay comparable across providers.
 
 from __future__ import annotations
 
+import re
 from abc import ABC, abstractmethod
 from collections.abc import Mapping
 from dataclasses import dataclass, field
@@ -18,11 +19,18 @@ from pydantic import JsonValue
 from dungeon_director.contracts import GenerationRequest, RoomPlan, UsageStats
 
 __all__ = [
+    "MODEL_ID_RE",
+    "PROVIDER_ID_RE",
     "DungeonDirectorProvider",
     "PlanPayload",
     "ProviderAvailability",
     "ProviderResult",
 ]
+
+#: Stable provider ids: lowercase, start with a letter or digit, at most 64 chars.
+PROVIDER_ID_RE = re.compile(r"^[a-z0-9][a-z0-9_.-]{0,63}$")
+#: Model ids follow each vendor's naming (``openai/gpt-oss-20b``, ``@cf/...``).
+MODEL_ID_RE = re.compile(r"^[A-Za-z0-9@][A-Za-z0-9_.:/@-]{0,127}$")
 
 #: What a provider may hand back as its decision. A ready :class:`RoomPlan`, a
 #: decoded JSON object, or raw JSON text/bytes are all accepted; the service

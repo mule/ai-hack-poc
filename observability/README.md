@@ -229,3 +229,16 @@ cost omission, shadow labelling, secret hygiene, and each fail-open path
   serialization.
 * Traces are rooted at the director; the game does not propagate a trace
   context yet.
+
+## Shadow evaluation (issue #13)
+
+The director records every active and shadow execution through the
+`ShadowObserver` interface in `director/dungeon_director/shadow.py`; the full
+record contract is documented in `director/docs/shadow-mode.md`. OpenTelemetry
+also instruments each actual provider execution through the shared service
+pipeline, with `director.execution_mode=active` or `shadow`.
+
+Shadow record metric labels come from `ExecutionRecord.metric_labels()` and are
+bounded to role, registered provider/model, status and reason. The
+`comparison_id`, `request_id` and `run_id` values are unbounded and belong only
+in stored records or span attributes, never metric labels.

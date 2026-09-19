@@ -3,7 +3,8 @@
 Endpoints:
 
 ``GET  /health``       liveness probe
-``GET  /v1/config``    default and registered provider/model identifiers (no secrets)
+``GET  /v1/config``    default and registered provider/model identifiers (no secrets);
+                       plus a ``shadow`` object only while shadow evaluation is enabled
 ``POST /v1/generate``  canonical :class:`GenerationRequest` in, canonical
                        :class:`GenerationResponse` out
 
@@ -14,6 +15,11 @@ the HTTP status says which kind of failure it was (404 unknown provider/model,
 422 invalid request, 429 rate limited, 502 bad provider output, 503 provider
 unavailable, 504 timeout).
 
+When shadow evaluation is enabled (``DIRECTOR_SHADOW_TARGETS``; see
+``docs/shadow-mode.md``) a generate answer that reached a provider also carries
+an ``X-Shadow-Comparison-Id`` response header linking it to the shadow records.
+The body is byte-for-byte what it would be without shadow mode.
+
 ``create_app`` builds a fully isolated app (own registry, settings and
 service), which is what tests use to inject fake providers. The module-level
 ``app`` is the production instance served by ``make run-director``.
@@ -23,7 +29,9 @@ Lifecycle ownership: the app closes the registry it serves — including an
 context exit). Callers that want to keep using a registry after the app that
 served it has shut down must not pass that registry to ``create_app``;
 provider ``aclose`` implementations must tolerate being closed exactly once
-per registry sweep (the Jev provider's is idempotent).
+per registry sweep (the Jev provider's is idempotent). Shutdown order matters:
+running shadow calls are drained (then cancelled) *before* the providers they
+use are closed.
 """
 
 from __future__ import annotations
@@ -46,21 +54,39 @@ from dungeon_director.service import DirectorService
 from dungeon_director.settings import DirectorSettings
 from dungeon_director.telemetry import DirectorTelemetry, TelemetrySettings, setup_telemetry
 
-__all__ = ["DirectorConfig", "app", "create_app"]
+__all__ = ["DirectorConfig", "ShadowConfigView", "app", "create_app"]
 
 logger = logging.getLogger(__name__)
 
 _SERVICE_NAME = "dungeon-director"
 _GENERATE_PATH = "/v1/generate"
 _MAX_SELECTOR_CHARS = 128
+COMPARISON_ID_HEADER = "X-Shadow-Comparison-Id"
+
+
+class ShadowTargetView(BaseModel):
+    provider: str
+    model: str | None
+
+
+class ShadowConfigView(BaseModel):
+    """Configured shadow targets and how many config entries were dropped."""
+
+    targets: list[ShadowTargetView]
+    rejected_config_entries: int
 
 
 class DirectorConfig(BaseModel):
-    """What ``GET /v1/config`` returns: identifiers and flags only."""
+    """What ``GET /v1/config`` returns: identifiers and flags only.
+
+    ``shadow`` is omitted from the JSON entirely unless shadow evaluation is
+    enabled, so the shape is unchanged for deployments that do not use it.
+    """
 
     default_provider: str
     default_model: str
     providers: list[ProviderDescriptor]
+    shadow: ShadowConfigView | None = None
 
 
 def get_service(request: Request) -> DirectorService:
@@ -94,16 +120,22 @@ def create_app(
         try:
             yield
         finally:
-            # Shutdown is best-effort per provider; cancellation propagates.
+            # Shadow calls use the providers, so they end first; then the
+            # providers close. Cancellation propagates, but the registry is
+            # still closed on the way out. Telemetry flushes last so completed
+            # shadow spans are included.
             try:
-                await registry.aclose()
+                await service.aclose()
             finally:
-                # Flushing can block on an unreachable collector, so keep it off the
-                # event loop; a failure here must never break shutdown.
                 try:
-                    await asyncio.to_thread(telemetry.shutdown)
-                except Exception as exc:
-                    logger.warning("telemetry shutdown failed (%s)", type(exc).__name__)
+                    # Best-effort per provider; cancellation propagates.
+                    await registry.aclose()
+                finally:
+                    # Export shutdown can block on an unreachable collector.
+                    try:
+                        await asyncio.to_thread(telemetry.shutdown)
+                    except Exception as exc:
+                        logger.warning("telemetry shutdown failed (%s)", type(exc).__name__)
 
     app = FastAPI(title="Dungeon Director", lifespan=lifespan)
     app.state.service = service
@@ -113,12 +145,28 @@ def create_app(
     def health() -> dict[str, str]:
         return {"status": "ok", "service": _SERVICE_NAME}
 
-    @app.get("/v1/config", response_model=DirectorConfig)
+    @app.get("/v1/config", response_model=DirectorConfig, response_model_exclude_none=True)
     def config() -> DirectorConfig:
+        shadow = service.shadow
         return DirectorConfig(
             default_provider=settings.default_provider,
             default_model=default_model,
             providers=registry.describe(),
+            shadow=(
+                ShadowConfigView(
+                    targets=[
+                        ShadowTargetView(provider=t.provider, model=t.model)
+                        for t in shadow.registered_targets
+                    ],
+                    # Malformed entries plus targets naming things that are not
+                    # registered: counted, never shown (could be a pasted secret).
+                    rejected_config_entries=shadow.rejected_config_entries
+                    + len(shadow.targets)
+                    - len(shadow.registered_targets),
+                )
+                if shadow is not None
+                else None
+            ),
         )
 
     @app.post(
@@ -154,8 +202,11 @@ def create_app(
         outcome = await service.generate(
             body, provider=_normalize_selector(provider), model=_normalize_selector(model)
         )
+        headers = {COMPARISON_ID_HEADER: outcome.comparison_id} if outcome.comparison_id else None
         return JSONResponse(
-            status_code=outcome.status_code, content=outcome.response.model_dump(mode="json")
+            status_code=outcome.status_code,
+            content=outcome.response.model_dump(mode="json"),
+            headers=headers,
         )
 
     @app.exception_handler(RequestValidationError)

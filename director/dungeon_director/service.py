@@ -29,13 +29,18 @@ so latency and reliability numbers stay comparable:
 * a provider that answered with unusable output still spent tokens and time, so
   the failure envelope keeps that result's ``provider_metadata`` and ``usage``.
   Usage is rebuilt field by field in bounds (failure and success alike), since
-  an instance may come from ``model_construct`` or be mutated. Provider-raised
+  an instance may come from ``model_construct`` or be mutated. Provider-*raised*
   errors carry no telemetry: adapter text and state are untrusted;
 * unexpected-exception logs carry the provider, model and exception *type*
   only: exception text and tracebacks can echo credentials;
 * telemetry is observation only: every telemetry call goes through
   :func:`_observe`, so a failing exporter, span or instrument can never change
-  the response, the status code or the cancellation behaviour.
+  the response, the status code or the cancellation behaviour;
+* shadow evaluation (:mod:`dungeon_director.shadow`) is strictly additive: the
+  active call is launched exactly as without it, shadow targets run the same
+  pipeline in background tasks on their own copy of the request, and nothing a
+  shadow does (slow, failing, cancelled, crashing) can change or delay the
+  active outcome. Cancelling the active call cancels its shadows.
 """
 
 from __future__ import annotations
@@ -45,8 +50,8 @@ import json
 import logging
 import math
 import time
-from collections.abc import Callable
-from dataclasses import dataclass
+from collections.abc import Callable, Sequence
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from typing import Any
 
@@ -68,6 +73,7 @@ from dungeon_director.errors import (
 from dungeon_director.providers import PlanPayload, ProviderResult
 from dungeon_director.registry import ProviderRegistry
 from dungeon_director.settings import DirectorSettings
+from dungeon_director.shadow import ShadowComparison, ShadowEvaluator, ShadowObserver
 from dungeon_director.telemetry import UNKNOWN, DirectorTelemetry, GenerationObservation
 
 __all__ = ["DirectorService", "GenerationOutcome", "status_for_error"]
@@ -116,8 +122,25 @@ def status_for_error(code: ErrorKind) -> int:
 
 @dataclass(frozen=True, slots=True)
 class GenerationOutcome:
+    """A canonical response plus the HTTP status it travels with.
+
+    ``comparison_id`` is set only when shadow evaluation is enabled: it links
+    the active outcome to the shadow records made for the same call. It never
+    appears in the response body.
+    """
+
     response: GenerationResponse
     status_code: int
+    comparison_id: str | None = None
+
+
+@dataclass(slots=True)
+class _ExecutionObservation:
+    observation: GenerationObservation | None
+    provider: str = UNKNOWN
+    model: str = UNKNOWN
+    provider_duration_s: float | None = None
+    selection_failed: bool = False
 
 
 def _observe(step: Callable[..., None], *args: Any, **kwargs: Any) -> None:
@@ -134,6 +157,8 @@ class DirectorService:
         registry: ProviderRegistry,
         settings: DirectorSettings,
         telemetry: DirectorTelemetry | None = None,
+        *,
+        shadow_observers: Sequence[ShadowObserver] = (),
     ) -> None:
         self._registry = registry
         self._settings = settings
@@ -144,6 +169,26 @@ class DirectorService:
             raise DirectorConfigError(
                 f"the default provider/model is unusable: {exc.message}"
             ) from exc
+        # Shadow targets are optional observation: an unusable one is warned
+        # about and skipped per request, never a startup failure.
+        self.shadow: ShadowEvaluator | None = None
+        if settings.shadow.enabled:
+            self.shadow = ShadowEvaluator(
+                settings.shadow,
+                registry,
+                self._run_shadow_target,
+                default_timeout=settings.timeout_seconds,
+                observers=shadow_observers,
+            )
+            self.shadow.check_targets()
+
+    async def aclose(self) -> None:
+        """Drain or cancel running shadow calls. Safe to call more than once.
+
+        Call this before closing the providers those calls are using.
+        """
+        if self.shadow is not None:
+            await self.shadow.aclose()
 
     def _begin_observation(
         self, request: GenerationRequest, is_shadow: bool
@@ -164,22 +209,139 @@ class DirectorService:
     ) -> GenerationOutcome:
         """Answer one request; only cancellation escapes as an exception.
 
-        ``is_shadow`` only labels the telemetry (active vs shadow execution);
-        it does not change how the request is answered.
+        ``is_shadow`` is retained as a direct execution hook for callers and
+        tests. Configured shadow fanout uses the same path internally.
         """
-        started_at = datetime.now(UTC)
-        started = time.perf_counter()
-
         provider_id = provider if provider is not None else self._settings.default_provider
         if model is None and provider_id == self._settings.default_provider:
             model = self._settings.default_model
 
-        observation = self._begin_observation(request, is_shadow)
-        # Metric labels come from the registry, never from the request: they stay
-        # "unknown" until a selection succeeds, so client-chosen ids can't mint series.
-        label_provider = UNKNOWN
-        label_model = UNKNOWN
-        provider_duration_s: float | None = None
+        if is_shadow:
+            return await self._execute(
+                request,
+                provider_id,
+                model,
+                timeout_seconds=self._settings.timeout_seconds,
+                shadow=True,
+            )
+
+        comparison: ShadowComparison | None = None
+
+        def start_shadows(selected_provider: str, selected_model: str) -> None:
+            nonlocal comparison
+            evaluator = self.shadow
+            if evaluator is None or not evaluator.enabled:
+                return
+            try:
+                comparison = evaluator.begin(
+                    request, provider=selected_provider, model=selected_model
+                )
+            except Exception as exc:  # shadow machinery must never fail the active call
+                logger.error("shadow evaluation could not start: %s", type(exc).__name__)
+
+        try:
+            outcome = await self._execute(
+                request,
+                provider_id,
+                model,
+                timeout_seconds=self._settings.timeout_seconds,
+                on_selected=start_shadows,
+            )
+        except BaseException as exc:
+            # Cancellation (or a bug) ended the active call: its shadows go too.
+            if comparison is not None:
+                comparison.abort(cancelled=isinstance(exc, asyncio.CancelledError))
+            raise
+        if comparison is None:
+            return outcome
+        comparison.finish_active(outcome)
+        return replace(outcome, comparison_id=comparison.comparison_id)
+
+    async def _run_shadow_target(
+        self, request: GenerationRequest, provider: str, model: str | None, timeout_seconds: float
+    ) -> GenerationOutcome:
+        """One shadow call: the same pipeline as the active one, on the shadow's own request."""
+        return await self._execute(
+            request, provider, model, timeout_seconds=timeout_seconds, shadow=True
+        )
+
+    async def _execute(
+        self,
+        request: GenerationRequest,
+        provider_id: str,
+        model: str | None,
+        *,
+        timeout_seconds: float,
+        on_selected: Callable[[str, str], None] | None = None,
+        shadow: bool = False,
+    ) -> GenerationOutcome:
+        """Observe one execution without letting instrumentation change its outcome."""
+        context = _ExecutionObservation(self._begin_observation(request, shadow))
+        observation = context.observation
+        try:
+            outcome = await self._execute_provider(
+                request,
+                provider_id,
+                model,
+                timeout_seconds=timeout_seconds,
+                on_selected=on_selected,
+                shadow=shadow,
+                observation=context,
+            )
+        except asyncio.CancelledError:
+            if observation is not None:
+                _observe(
+                    observation.cancel,
+                    provider=context.provider,
+                    model=context.model,
+                    provider_latency_s=context.provider_duration_s,
+                )
+            raise
+        except Exception:
+            if observation is not None:
+                _observe(
+                    observation.abort,
+                    provider=context.provider,
+                    model=context.model,
+                    provider_latency_s=context.provider_duration_s,
+                )
+            raise
+        else:
+            if observation is not None:
+                _observe(
+                    observation.finish,
+                    outcome.response,
+                    http_status=outcome.status_code,
+                    provider=context.provider,
+                    model=context.model,
+                    provider_latency_s=context.provider_duration_s,
+                    selection_failed=context.selection_failed,
+                )
+            return outcome
+        finally:
+            if observation is not None:
+                _observe(observation.end)
+
+    async def _execute_provider(
+        self,
+        request: GenerationRequest,
+        provider_id: str,
+        model: str | None,
+        *,
+        timeout_seconds: float,
+        on_selected: Callable[[str, str], None] | None,
+        shadow: bool,
+        observation: _ExecutionObservation,
+    ) -> GenerationOutcome:
+        """Select, call, time-limit and validate one provider; failures become envelopes.
+
+        ``on_selected`` runs once the provider/model resolved and before the
+        provider is awaited (the shadow launch point). ``shadow`` only changes
+        the log prefix.
+        """
+        started_at = datetime.now(UTC)
+        started = time.perf_counter()
+        tag = "shadow " if shadow else ""
 
         def fail(
             code: ErrorKind,
@@ -189,7 +351,6 @@ class DirectorService:
             raw_excerpt: str | None = None,
             provider_metadata: dict[str, JsonValue] | None = None,
             resolved_model: str | None = None,
-            selection_failed: bool = False,
             usage: UsageStats | None = None,
         ) -> GenerationOutcome:
             response = GenerationResponse.failure(
@@ -206,180 +367,153 @@ class DirectorService:
                 provider_metadata=provider_metadata,
             )
             response.metadata.latency_ms = _elapsed_ms(started)
-            return done(
-                GenerationOutcome(response, status or status_for_error(code)),
-                selection_failed=selection_failed,
-            )
+            return GenerationOutcome(response, status or status_for_error(code))
 
-        def done(
-            outcome: GenerationOutcome, *, selection_failed: bool = False
-        ) -> GenerationOutcome:
-            if observation is not None:
-                _observe(
-                    observation.finish,
-                    outcome.response,
-                    http_status=outcome.status_code,
-                    provider=label_provider,
-                    model=label_model,
-                    provider_latency_s=provider_duration_s,
-                    selection_failed=selection_failed,
-                )
-            return outcome
+        try:
+            selection = self._registry.select(provider_id, model)
+        except ProviderSelectionError as exc:
+            observation.selection_failed = True
+            if exc.reason is not SelectionReason.UNKNOWN_PROVIDER:
+                observation.provider = provider_id
+            return fail(
+                ErrorKind.PROVIDER_ERROR,
+                exc.message,
+                status=_SELECTION_STATUS[exc.reason],
+                provider_metadata={"selection_error": exc.reason.value},
+            )
+        model = selection.model
+        observation.provider = provider_id
+        observation.model = selection.model
+        if on_selected is not None:
+            on_selected(provider_id, model)
+
+        deadline = asyncio.timeout(timeout_seconds)
+        call_started = time.perf_counter()
+
+        def deadline_missed() -> GenerationOutcome:
+            logger.warning(
+                "%sprovider %s/%s missed the %gs deadline", tag, provider_id, model, timeout_seconds
+            )
+            return fail(
+                ErrorKind.PROVIDER_TIMEOUT,
+                f"Provider did not respond within {timeout_seconds:g} seconds.",
+                provider_metadata={"timeout_origin": "director_deadline"},
+            )
 
         try:
             try:
-                selection = self._registry.select(provider_id, model)
-            except ProviderSelectionError as exc:
-                if exc.reason is not SelectionReason.UNKNOWN_PROVIDER:
-                    label_provider = provider_id  # registered, so a bounded value
-                return fail(
-                    ErrorKind.PROVIDER_ERROR,
-                    exc.message,
-                    status=_SELECTION_STATUS[exc.reason],
-                    provider_metadata={"selection_error": exc.reason.value},
-                    selection_failed=True,
-                )
-            model = selection.model
-            label_provider = provider_id
-            label_model = selection.model
-
-            timeout_seconds = self._settings.timeout_seconds
-            deadline = asyncio.timeout(timeout_seconds)
-            call_started = time.perf_counter()
-
-            def deadline_missed() -> GenerationOutcome:
-                logger.warning(
-                    "provider %s/%s missed the %gs deadline", provider_id, model, timeout_seconds
-                )
-                return fail(
-                    ErrorKind.PROVIDER_TIMEOUT,
-                    f"Provider did not respond within {timeout_seconds:g} seconds.",
-                    provider_metadata={"timeout_origin": "director_deadline"},
-                )
-
-            try:
-                try:
-                    async with deadline:
-                        result = await selection.provider.generate(request, model=selection.model)
-                finally:
-                    provider_duration_s = time.perf_counter() - call_started
-            except TimeoutError:
-                if deadline.expired():
-                    return deadline_missed()
-                # The provider raised TimeoutError itself (its own upstream timed out).
-                logger.warning("provider %s/%s raised TimeoutError", provider_id, model)
-                return fail(
-                    ErrorKind.PROVIDER_TIMEOUT,
-                    "Provider reported a timeout from its own upstream.",
-                    provider_metadata={"timeout_origin": "provider"},
-                )
-            except ProviderError as exc:
-                # Log the code only: message and excerpt are adapter-controlled and
-                # may contain credentials.
-                code = exc.code if isinstance(exc.code, ErrorKind) else ErrorKind.PROVIDER_ERROR
-                logger.warning(
-                    "provider %s/%s reported %s (adapter text withheld)",
-                    provider_id,
-                    model,
-                    code.value,
-                )
-                return fail(
-                    code,
-                    _PUBLIC_MESSAGES[code],
-                    provider_metadata=(
-                        {"timeout_origin": "provider"}
-                        if code is ErrorKind.PROVIDER_TIMEOUT
-                        else None
-                    ),
-                )
-            except Exception as exc:
-                # Exception text and tracebacks can carry URLs or tokens: neither the
-                # log nor the game gets them, only the exception type.
-                logger.error(
-                    "provider %s/%s raised unexpected %s", provider_id, model, type(exc).__name__
-                )
-                return fail(ErrorKind.PROVIDER_ERROR, f"Provider raised {type(exc).__name__}.")
-
-            # A provider that swallowed the cancellation, or blocked the event loop,
-            # can come back after the deadline: the answer is stale, not a success.
-            if deadline.expired() or time.perf_counter() - call_started >= timeout_seconds:
+                async with deadline:
+                    result = await selection.provider.generate(request, model=selection.model)
+            finally:
+                observation.provider_duration_s = time.perf_counter() - call_started
+        except TimeoutError:
+            if deadline.expired():
                 return deadline_missed()
+            # The provider raised TimeoutError itself (its own upstream timed out).
+            logger.warning("%sprovider %s/%s raised TimeoutError", tag, provider_id, model)
+            return fail(
+                ErrorKind.PROVIDER_TIMEOUT,
+                "Provider reported a timeout from its own upstream.",
+                provider_metadata={"timeout_origin": "provider"},
+            )
+        except ProviderError as exc:
+            # Log the code only: message and excerpt are adapter-controlled and
+            # may contain credentials.
+            code = exc.code if isinstance(exc.code, ErrorKind) else ErrorKind.PROVIDER_ERROR
+            logger.warning(
+                "%sprovider %s/%s reported %s (adapter text withheld)",
+                tag,
+                provider_id,
+                model,
+                code.value,
+            )
+            return fail(
+                code,
+                _PUBLIC_MESSAGES[code],
+                provider_metadata=(
+                    {"timeout_origin": "provider"} if code is ErrorKind.PROVIDER_TIMEOUT else None
+                ),
+            )
+        except Exception as exc:
+            # Exception text and tracebacks can carry URLs or tokens: neither the
+            # log nor the game gets them, only the exception type.
+            logger.error(
+                "%sprovider %s/%s raised unexpected %s",
+                tag,
+                provider_id,
+                model,
+                type(exc).__name__,
+            )
+            return fail(ErrorKind.PROVIDER_ERROR, f"Provider raised {type(exc).__name__}.")
 
-            # A provider that answered but produced unusable output still spent
-            # tokens and time: keep that telemetry on the failure so benchmarks can
-            # count it. The result is untrusted, so usage is rebuilt in bounds and
-            # metadata must at least be a dict (the envelope re-checks its budget).
-            usage = _canonical_usage(result.usage) if isinstance(result, ProviderResult) else None
-            result_telemetry: dict[str, UsageStats | dict[str, JsonValue] | None] = {"usage": usage}
-            if isinstance(result, ProviderResult) and isinstance(result.provider_metadata, dict):
-                result_telemetry["provider_metadata"] = result.provider_metadata
+        # A provider that swallowed the cancellation, or blocked the event loop,
+        # can come back after the deadline: the answer is stale, not a success.
+        if deadline.expired() or time.perf_counter() - call_started >= timeout_seconds:
+            return deadline_missed()
 
-            try:
-                if not isinstance(result, ProviderResult):
-                    raise _InvalidOutput(
-                        ErrorKind.SCHEMA_VIOLATION, "Provider returned an invalid result object."
-                    )
-                room = _coerce_room(result.payload)
-                response = GenerationResponse.success_from_request(
-                    request,
-                    room=room,
-                    provider=provider_id,
-                    model=model,
-                    started_at=started_at,
-                    completed_at=datetime.now(UTC),
-                    usage=usage,
-                    provider_metadata=result.provider_metadata,
-                )
-            except _InvalidOutput as exc:
-                logger.warning(
-                    "provider %s/%s output rejected: %s", provider_id, model, exc.code.value
-                )
-                return fail(
-                    exc.code,
-                    exc.message,
-                    raw_excerpt=exc.raw_excerpt,
-                    **result_telemetry,
-                )
-            except ValidationError as exc:
-                return fail(ErrorKind.SCHEMA_VIOLATION, _summarize(exc), **result_telemetry)
-            except ValueError as exc:  # e.g. room depth differs from the request depth
-                return fail(ErrorKind.SCHEMA_VIOLATION, str(exc), **result_telemetry)
-            except Exception as exc:
-                logger.error(
-                    "provider %s/%s result could not be processed: %s",
-                    provider_id,
-                    model,
-                    type(exc).__name__,
-                )
-                return fail(
-                    ErrorKind.INTERNAL_ERROR,
-                    "Director failed to process the provider result.",
-                    **result_telemetry,
-                )
+        # A provider that answered but produced unusable output still spent
+        # tokens and time: keep that telemetry on the failure so benchmarks can
+        # count it. The result is untrusted, so usage is rebuilt in bounds and
+        # metadata must at least be a dict (the envelope re-checks its budget).
+        usage = _canonical_usage(result.usage) if isinstance(result, ProviderResult) else None
+        telemetry: dict[str, UsageStats | dict[str, JsonValue] | None] = {"usage": usage}
+        if isinstance(result, ProviderResult) and isinstance(result.provider_metadata, dict):
+            telemetry["provider_metadata"] = result.provider_metadata
 
-            response.metadata.latency_ms = _elapsed_ms(started)
-            return done(GenerationOutcome(response, 200))
-        except asyncio.CancelledError:
-            if observation is not None:
-                _observe(
-                    observation.cancel,
-                    provider=label_provider,
-                    model=label_model,
-                    provider_latency_s=provider_duration_s,
+        try:
+            if not isinstance(result, ProviderResult):
+                raise _InvalidOutput(
+                    ErrorKind.SCHEMA_VIOLATION, "Provider returned an invalid result object."
                 )
-            raise
-        except Exception:
-            if observation is not None:
-                _observe(
-                    observation.abort,
-                    provider=label_provider,
-                    model=label_model,
-                    provider_latency_s=provider_duration_s,
-                )
-            raise
-        finally:
-            if observation is not None:
-                _observe(observation.end)
+            room = _coerce_room(result.payload)
+            response = GenerationResponse.success_from_request(
+                request,
+                room=room,
+                provider=provider_id,
+                model=model,
+                started_at=started_at,
+                completed_at=datetime.now(UTC),
+                usage=usage,
+                provider_metadata=result.provider_metadata,
+            )
+        except _InvalidOutput as exc:
+            logger.warning(
+                "%sprovider %s/%s output rejected: %s", tag, provider_id, model, exc.code.value
+            )
+            return fail(
+                exc.code,
+                exc.message,
+                raw_excerpt=exc.raw_excerpt,
+                **telemetry,
+            )
+        except ValidationError as exc:
+            return fail(
+                ErrorKind.SCHEMA_VIOLATION,
+                _summarize(exc),
+                **telemetry,
+            )
+        except ValueError as exc:  # e.g. room depth differs from the request depth
+            return fail(
+                ErrorKind.SCHEMA_VIOLATION,
+                str(exc),
+                **telemetry,
+            )
+        except Exception as exc:
+            logger.error(
+                "%sprovider %s/%s result could not be processed: %s",
+                tag,
+                provider_id,
+                model,
+                type(exc).__name__,
+            )
+            return fail(
+                ErrorKind.INTERNAL_ERROR,
+                "Director failed to process the provider result.",
+                **telemetry,
+            )
+
+        response.metadata.latency_ms = _elapsed_ms(started)
+        return GenerationOutcome(response, 200)
 
 
 class _InvalidOutput(Exception):
@@ -401,7 +535,15 @@ def _elapsed_ms(started: float) -> float:
 
 
 def _canonical_usage(usage: object) -> UsageStats | None:
-    """Build fresh bounded usage from an untrusted provider result, or return ``None``."""
+    """A fresh, in-bounds :class:`UsageStats` built from an untrusted one, or ``None``.
+
+    An ``isinstance`` check proves nothing about the bounds: instances can come
+    from ``model_construct`` or be mutated after validation, and Pydantic does
+    not revalidate instances when they are nested into the envelope. Each field
+    is therefore re-validated on its own (strictly, so ``True`` or ``"12"`` are
+    not coerced to tokens), invalid fields are dropped, and a non-finite cost is
+    dropped too because it cannot be serialized. The input is never mutated.
+    """
     if not isinstance(usage, UsageStats):
         return None
     try:

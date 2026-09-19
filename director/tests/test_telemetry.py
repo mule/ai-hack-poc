@@ -37,7 +37,7 @@ from dungeon_director.errors import ProviderError
 from dungeon_director.providers import ProviderResult
 from dungeon_director.registry import ProviderRegistry
 from dungeon_director.service import DirectorService, GenerationOutcome
-from dungeon_director.settings import DirectorSettings
+from dungeon_director.settings import DirectorSettings, ShadowSettings, ShadowTarget
 from dungeon_director.telemetry import (
     DEFAULT_OTLP_ENDPOINT,
     LATENCY_BUCKET_BOUNDARIES,
@@ -247,6 +247,38 @@ def test_shadow_execution_is_distinguishable_on_span_and_metrics(harness):
     }
     assert modes == {("active", False), ("shadow", True)}
     by_mode = {p.attributes["execution_mode"]: p.value for p in harness.request_points()}
+    assert by_mode == {"active": 1, "shadow": 1}
+
+
+def test_configured_shadow_fanout_uses_the_instrumented_execution_path(harness):
+    registry = ProviderRegistry()
+    registry.register(FakeProvider("active"))
+    registry.register(FakeProvider("shadow"))
+    settings = DirectorSettings(
+        default_provider="active",
+        shadow=ShadowSettings(targets=(ShadowTarget("shadow"),)),
+    )
+    service = DirectorService(registry, settings, telemetry=harness.telemetry)
+
+    async def scenario() -> GenerationOutcome:
+        outcome = await service.generate(make_request())
+        assert outcome.comparison_id is not None
+        assert service.shadow is not None
+        await asyncio.wait_for(service.aclose(), timeout=2)
+        return outcome
+
+    outcome = asyncio.run(scenario())
+
+    assert outcome.response.metadata.provider == "active"
+    spans_by_mode = {
+        span.attributes["director.execution_mode"]: span for span in harness.finished_spans()
+    }
+    assert set(spans_by_mode) == {"active", "shadow"}
+    assert spans_by_mode["active"].attributes["director.provider"] == "active"
+    assert spans_by_mode["shadow"].attributes["director.provider"] == "shadow"
+    by_mode = {
+        point.attributes["execution_mode"]: point.value for point in harness.request_points()
+    }
     assert by_mode == {"active": 1, "shadow": 1}
 
 

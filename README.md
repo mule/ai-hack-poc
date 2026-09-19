@@ -191,8 +191,8 @@ Interactive API docs are served at `/docs` while the director runs.
 | Endpoint | Purpose |
 |----------|---------|
 | `GET /health` | Liveness: `{"status":"ok","service":"dungeon-director"}` |
-| `GET /v1/config` | Default provider/model and every registered provider with its models and an `available` flag. Identifiers only, never credentials |
-| `POST /v1/generate` | Body: the canonical `GenerationRequest`. Optional `?provider=<id>&model=<id>` (defaults come from configuration). Returns a canonical `GenerationResponse` |
+| `GET /v1/config` | Default provider/model and every registered provider with its models and an `available` flag. Identifiers only, never credentials. Gains a `shadow` object only while shadow evaluation is enabled |
+| `POST /v1/generate` | Body: the canonical `GenerationRequest`. Optional `?provider=<id>&model=<id>` (defaults come from configuration). Returns a canonical `GenerationResponse`; with shadow evaluation enabled also an `X-Shadow-Comparison-Id` header |
 
 Provider/model selection is a query parameter so the shared contract is
 untouched. **Every** `/v1/generate` answer, including failures, is a
@@ -276,6 +276,20 @@ It is registered but unavailable until `CEREBRAS_API_KEY` is set; its model is
 configurable with `CEREBRAS_MODEL`. The request contract, error mapping,
 sanitized samples, and opt-in live tests are documented in
 `director/docs/cerebras.md`.
+
+Shadow evaluation (issue #13) compares providers on identical requests while
+one provider stays in control. With `DIRECTOR_SHADOW_TARGETS=cerebras,cloudflare-jev`
+(entries are `provider` or `provider:model`), every `/v1/generate` call also
+sends a private copy of the same request to those targets in background tasks.
+Only the active provider's answer is returned and affects the game; a slow,
+failing or cancelled shadow can never delay, alter or fail it. Each execution,
+active and shadow, is recorded (raw canonical outcome, timing, usage, provider
+metadata, request/run ids) under a fresh `cmp-...` comparison id that is also
+sent to the caller in an `X-Shadow-Comparison-Id` response header. Concurrency,
+stored comparisons and shutdown are all bounded, and malformed or unavailable
+shadow configuration degrades to skipped records instead of stopping startup.
+Behaviour, configuration, the record schema and the metric-label rules for the
+observability work are in `director/docs/shadow-mode.md`.
 
 Adding a provider means subclassing `DungeonDirectorProvider`
 (`director/dungeon_director/providers.py`) and registering it in
@@ -365,6 +379,13 @@ load; its contents belong to the game shell.
   `CEREBRAS_API_BASE_URL` (default `https://api.cerebras.ai/v1`; HTTPS except
   loopback) with the same credential hygiene. Invalid optional configuration
   disables only Cerebras; choosing it as the default still stops startup.
+- Shadow evaluation is off unless `DIRECTOR_SHADOW_TARGETS` (comma-separated
+  `provider` or `provider:model`, at most 4) is set. Optional tuning:
+  `DIRECTOR_SHADOW_TIMEOUT_SECONDS`, `DIRECTOR_SHADOW_MAX_IN_FLIGHT` (default
+  `8`), `DIRECTOR_SHADOW_STORE_SIZE` (default `128`) and
+  `DIRECTOR_SHADOW_DRAIN_SECONDS` (default `5`). Unlike the core settings,
+  malformed shadow values never stop startup: they degrade with a warning that
+  never echoes the value. See `director/docs/shadow-mode.md`.
 - Provider and model selection is configuration-driven: the game names a
   provider/model by stable id in the query string, never provider-specific logic.
 
@@ -375,12 +396,14 @@ game/           Godot 2D client (issue #4); simulation/ is the headless harness 
 director/       FastAPI director service
   dungeon_director/   Python package: app.py (HTTP + app factory), service.py
                       (timeout/validation/failure policy), providers.py,
-                      registry.py, rules.py (baseline), cloudflare_jev.py
+                      registry.py, shadow.py (shadow evaluation, issue #13),
+                      rules.py (baseline), cloudflare_jev.py
                       (TypeSafe Jev via Cloudflare, issue #8), groq.py
                       (Groq GPT-OSS, issue #9), cerebras.py
                       (Cerebras Qwen, issue #10), telemetry.py
                       (OpenTelemetry, issue #11), settings.py, contracts.py
   docs/               Provider docs (cloudflare-jev.md, groq.md, cerebras.md)
+                      and shadow-mode.md
   tests/              Offline tests + fixtures (incl. sanitized provider samples)
                  and live tests (Jev, Groq, and Cerebras,
                  credential- and opt-in-gated; conftest.py blocks the network

@@ -62,4 +62,5 @@ def test_provider_credentials_in_the_environment_are_never_captured():
         "default_provider",
         "default_model",
         "timeout_seconds",
+        "shadow",  # provider/model ids and bounds only; see test_shadow_settings.py
     }
