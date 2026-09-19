@@ -471,7 +471,12 @@ async def run_benchmark(
         )
     finally:
         if reg is not None:
-            await reg.aclose()
+            try:
+                # Configured shadow calls use the same provider clients. Drain
+                # them before the registry closes those clients.
+                await service.aclose()
+            finally:
+                await reg.aclose()
 
 
 def print_human_summary(report: BenchmarkReport) -> None:

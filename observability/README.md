@@ -28,7 +28,7 @@ so the name never becomes a high-cardinality grouping key.
 | `director.selection_error` | `unknown_provider`, `unknown_model`, `provider_unavailable`. |
 | `director.schema_valid` | `true` on success, `false` on schema/JSON/version failures, absent when unknown. |
 | `director.retry_count` | Always `0`: the director never retries. |
-| `director.is_shadow`, `director.execution_mode` | `false`/`active` or `true`/`shadow`, ready for the shadow runner in #13. |
+| `director.is_shadow`, `director.execution_mode` | `false`/`active` or `true`/`shadow`; configured #13 fanout uses the same instrumented execution path. |
 | `director.room.*` | Type, size, danger, exit count, secrets, densities of the chosen room (success only). |
 | `gen_ai.system`, `gen_ai.request.model`, `gen_ai.response.model` | For OpenLIT's GenAI views. |
 | `gen_ai.usage.input_tokens`, `.output_tokens`, `.total_tokens`, `.cost` | Only when the provider reported them. |

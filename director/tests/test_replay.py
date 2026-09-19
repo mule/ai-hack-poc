@@ -417,7 +417,9 @@ class CloseTrackingProvider(RulesProvider):
         self.close_calls += 1
 
 
-def test_run_benchmark_lifecycle_closes_registry_on_success_and_failure():
+def test_run_benchmark_lifecycle_closes_service_and_registry_on_success_and_failure(
+    monkeypatch: pytest.MonkeyPatch,
+):
     req = make_request()
 
     # Success case: provider closes cleanly
@@ -428,6 +430,14 @@ def test_run_benchmark_lifecycle_closes_registry_on_success_and_failure():
         reg_success,
         DirectorSettings(default_provider="tracker-success", default_model="builtin-v1"),
     )
+    success_service_closes: list[int] = []
+    original_success_close = service_success.aclose
+
+    async def close_success_service() -> None:
+        success_service_closes.append(1)
+        await original_success_close()
+
+    monkeypatch.setattr(service_success, "aclose", close_success_service)
 
     report = asyncio.run(
         run_benchmark(
@@ -441,6 +451,7 @@ def test_run_benchmark_lifecycle_closes_registry_on_success_and_failure():
     assert report.total_events_read == 1
     assert tracker_success.closed is True
     assert tracker_success.close_calls == 1
+    assert success_service_closes == [1]
 
     # Failure case: provider closes even if exception occurs during run
     tracker_failure = CloseTrackingProvider("tracker-fail")
@@ -450,6 +461,14 @@ def test_run_benchmark_lifecycle_closes_registry_on_success_and_failure():
         reg_failure,
         DirectorSettings(default_provider="tracker-fail", default_model="builtin-v1"),
     )
+    failure_service_closes: list[int] = []
+    original_failure_close = service_failure.aclose
+
+    async def close_failure_service() -> None:
+        failure_service_closes.append(1)
+        await original_failure_close()
+
+    monkeypatch.setattr(service_failure, "aclose", close_failure_service)
 
     class CustomError(Exception):
         pass
@@ -477,3 +496,4 @@ def test_run_benchmark_lifecycle_closes_registry_on_success_and_failure():
 
     assert tracker_failure.closed is True
     assert tracker_failure.close_calls == 1
+    assert failure_service_closes == [1]

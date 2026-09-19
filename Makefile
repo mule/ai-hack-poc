@@ -57,11 +57,15 @@ run-director: need-venv ## Start the director (default 127.0.0.1:8000) with auto
 test: need-venv ## Run the director tests
 	cd director && ../$(VENV_BIN)/python -m pytest
 
-lint: need-venv ## Lint and format-check the director (ruff)
+lint: need-venv ## Lint and format-check Python code (ruff)
 	cd director && ../$(VENV_BIN)/python -m ruff check . && ../$(VENV_BIN)/python -m ruff format --check .
+	$(VENV_BIN)/python -m ruff check --config director/pyproject.toml benchmarks
+	$(VENV_BIN)/python -m ruff format --check --config director/pyproject.toml benchmarks
 
-format: need-venv ## Auto-fix and format the director (ruff)
+format: need-venv ## Auto-fix and format Python code (ruff)
 	cd director && ../$(VENV_BIN)/python -m ruff check --fix . && ../$(VENV_BIN)/python -m ruff format .
+	$(VENV_BIN)/python -m ruff check --fix --config director/pyproject.toml benchmarks
+	$(VENV_BIN)/python -m ruff format --config director/pyproject.toml benchmarks
 
 check: lint test ## Python lint + tests (no Godot required)
 
