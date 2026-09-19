@@ -16,11 +16,12 @@ This shell serves as the minimal playable game workload for the dungeon generati
 - **Death & Restart**: Death triggers a game over overlay and blocks further movement; pressing `R` or tapping **Restart** resets the state.
 - **Responsive Layout**: Designed for both desktop and mobile/Android viewports (`canvas_items` stretch mode, `expand` aspect ratio) with top stats bar, turn log panel, and on-screen touch controls.
 - **Controls**:
-  - **Keyboard**: Arrow keys, WASD, or Numpad (8, 2, 4, 6) for movement; Space / Numpad 5 for wait; `R` for restart.
+  - **Keyboard**: Arrow keys, WASD, or Numpad (8, 2, 4, 6) for movement; Space / Numpad 5 for wait; `R` for restart; `P` for provider/model selection; backquote or `F3` for the debug HUD.
   - **Controller / Gamepad**: D-pad for movement, A / Cross for wait, Y / Triangle for restart.
-  - **Touch Controls**: On-screen directional buttons (▲, ▼, ◀, ▶), Wait button, and modal Restart button (`focus_mode=FOCUS_NONE` to avoid stealing keyboard/gamepad input).
+  - **Touch Controls**: On-screen directional buttons (▲, ▼, ◀, ▶), Wait, **CFG** for provider/model selection, **HUD** for generation diagnostics, and the modal Restart button (`focus_mode=FOCUS_NONE` to avoid stealing keyboard/gamepad input).
 - **Deferred generation** (issue #7): the main scene starts with one small committed room; exits lead into unknown space and new rooms are generated as you approach (see below). The legacy static map remains available to the mechanics tests via `GameState.new()`; the main scene opts into the dynamic world with `enable_dynamic_world()`.
 - **Provider-neutral**: the game only speaks the canonical `POST /v1/generate` contract; there is no provider-specific logic.
+- **Runtime experiments** (issue #12): the selector reads `GET /v1/config`, marks unavailable providers, and applies a provider/model pair to a fresh run. The toggleable HUD shows generation status, end-to-end latency, recent `RoomPlan` decisions, fallbacks, and opaque provider metadata such as Jev probabilities without using it for gameplay.
 
 ## Launching the Game
 
@@ -69,6 +70,16 @@ godot --headless --path game -s res://tests/test_deferred_simulation.gd   # 100+
 ```
 
 No live server is needed: transports are injected fakes plus a loopback mini HTTP server (`tests/support/`).
+
+### Running Provider Selector and Debug HUD Tests
+
+```bash
+godot --headless --path game -s res://tests/test_provider_selector.gd
+```
+
+The suite covers live config parsing, unavailable and offline providers,
+provider/model changes across run resets, keyboard and touch controls, latency,
+recent decisions, generic provider metadata, and success-to-fallback HUD state.
 
 ### Running the Simulation Harness (issue #16)
 
@@ -123,6 +134,7 @@ Code lives in `world/`; `GameState` owns a `DungeonWorld` and `MainGame` drives 
 - **Triggering** (`generation_coordinator.gd`): unresolved exits within `trigger_radius` (3 tiles, Manhattan) of the player are prefetched, at most `max_in_flight` at a time. One adjacent player-facing frontier may use an urgent reserve beyond that limit, so speculative requests cannot block the next passage. `update()` never blocks; results arrive later and the current room stays playable. Approaching a still-pending exit shows "The way ahead is still taking shape...".
 - **Fallback**: on timeout, transport failure, invalid or failed response, mismatched ids, or placement rejection, a deterministic local plan (`rules_baseline.gd`, a function of run id + frontier only) is committed instead; if even the smallest room cannot fit, the exit is sealed. Fallbacks are observable in the on-screen log, the `[dungeon-gen]` console line, HUD (`Fallbacks: n`) and `world.generation_log` / `world.counters`.
 - **Rendering**: unresolved exits are drawn with a coloured door frame, arrow and a hatched "unknown" cell (violet = unresolved, amber = pending).
+- **Runtime selection and diagnostics**: press `P` or tap **CFG** to fetch the director configuration. Applying a provider/model resets the dungeon and sends the selection with future generation requests. Press backquote or `F3`, or tap **HUD**, to inspect the latest outcome and a bounded history of decisions. If the config endpoint is unreachable, the selector offers `rules-baseline` / `builtin-v1` as an explicit offline fallback.
 
 ### Configuration (environment)
 
