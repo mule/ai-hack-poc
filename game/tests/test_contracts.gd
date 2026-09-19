@@ -68,6 +68,8 @@ func _run_all(fixtures_dir: String) -> void:
 	_run("negative validations", _test_negative_validations)
 	_run("version policy", _test_version_policy)
 	_run("hardened invariants", _test_hardened_invariants.bind(request_text))
+	_run("director config contract", _test_director_config_contract)
+
 
 
 func _run(test_name: String, test: Callable) -> void:
@@ -348,7 +350,74 @@ func _response_with(room: Variant, success: bool) -> Dictionary:
 	}
 
 
+func _test_director_config_contract() -> void:
+	var valid_config_json := JSON.stringify({
+		"default_provider": "rules-baseline",
+		"default_model": "builtin-v1",
+		"providers": [
+			{
+				"id": "rules-baseline",
+				"available": true,
+				"default_model": "builtin-v1",
+				"models": ["builtin-v1"]
+			},
+			{
+				"id": "cloudflare-jev",
+				"available": false,
+				"default_model": "typesafe/jev",
+				"models": ["typesafe/jev"]
+			}
+		],
+		"shadow": {
+			"targets": [{"provider": "cloudflare-jev", "model": "typesafe/jev"}],
+			"rejected_config_entries": 0
+		}
+	})
+
+	var parsed := DungeonContracts.parse_director_config(valid_config_json)
+	_check(parsed.ok, "valid director config parses successfully")
+	var cfg: DungeonContracts.DirectorConfigData = DungeonContracts.DirectorConfigData.from_dict(parsed.config)
+	_check(cfg.default_provider == "rules-baseline", "cfg.default_provider")
+	_check(cfg.default_model == "builtin-v1", "cfg.default_model")
+	_check(cfg.providers.size() == 2, "cfg.providers.size == 2")
+	_check(cfg.providers[0].id == "rules-baseline" and cfg.providers[0].available == true, "provider 0 is available")
+	_check(cfg.providers[1].id == "cloudflare-jev" and cfg.providers[1].available == false, "provider 1 is unavailable")
+
+	# Negative cases:
+	# 1. Missing required key
+	var missing_key := {
+		"default_provider": "rules-baseline",
+		"providers": []
+	}
+	_check(not DungeonContracts.validate_director_config(missing_key).ok, "missing default_model rejected")
+
+	# 2. Unknown key rejected
+	var unknown_key := {
+		"default_provider": "rules-baseline",
+		"default_model": "builtin-v1",
+		"providers": [],
+		"secret_token": "leak"
+	}
+	_check(not DungeonContracts.validate_director_config(unknown_key).ok, "unknown key rejected")
+
+	# 3. default_model not in models
+	var bad_models := {
+		"default_provider": "rules-baseline",
+		"default_model": "builtin-v1",
+		"providers": [
+			{
+				"id": "rules-baseline",
+				"available": true,
+				"default_model": "builtin-v1",
+				"models": ["other_model"]
+			}
+		]
+	}
+	_check(not DungeonContracts.validate_director_config(bad_models).ok, "default_model not in models rejected")
+
+
 func _read_fixture(fixtures_dir: String, file_name: String) -> String:
+
 	var path := fixtures_dir.path_join(file_name)
 	var file := FileAccess.open(path, FileAccess.READ)
 	if file == null:

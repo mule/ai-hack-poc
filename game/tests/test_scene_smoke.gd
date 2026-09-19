@@ -78,8 +78,15 @@ func test_scene_composition_and_focus() -> void:
 		ui.get_node("TouchControls/LeftBtn"),
 		ui.get_node("TouchControls/RightBtn"),
 		ui.get_node("TouchControls/WaitBtn"),
+		ui.get_node("TouchControls/HudBtn"),
+		ui.get_node("TouchControls/ProviderBtn"),
+		ui.get_node("DebugHUD/Panel/VBox/Header/CloseBtn"),
+		ui.get_node("ProviderSelector/Panel/VBox/ButtonRow/RefreshBtn"),
+		ui.get_node("ProviderSelector/Panel/VBox/ButtonRow/CancelBtn"),
+		ui.get_node("ProviderSelector/Panel/VBox/ButtonRow/ApplyBtn"),
 		ui.get_node("DeathOverlay/VBox/RestartBtn")
 	]
+
 	
 	for btn in buttons:
 		assert_true(btn != null, "Button exists")

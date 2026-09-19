@@ -62,6 +62,9 @@ var player_attack_power: int = 4
 var player_score: int = 0
 var player_turns: int = 0
 var is_player_dead: bool = false
+var active_provider: String = ""
+var active_model: String = ""
+
 
 # Entities
 # Array of dicts: { "id": int, "type": String, "pos": Vector2i, "hp": int, "max_hp": int, "attack": int, "name": String }

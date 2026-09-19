@@ -122,6 +122,12 @@ godot-test: ## Run Godot tests headlessly (mechanics plus optional contract, gen
 	else \
 		echo "game/tests/test_scene_smoke.gd not present: skipping scene smoke test"; \
 	fi
+	@if test -f game/tests/test_provider_selector.gd; then \
+		echo "Running provider selector and debug HUD test (#12)"; \
+		$(call godot_run,-s res://tests/test_provider_selector.gd,$(GODOT_LOG_DIR)/godot-provider-selector.log,SUCCESS: All provider selector and debug HUD checks passed!); \
+	else \
+		echo "game/tests/test_provider_selector.gd not present: skipping provider selector test"; \
+	fi
 
 simulate: ## Headless dungeon simulation: offline rules baseline, 5 runs x 100 steps. SIM_ARGS='...' SIM_OUT=dir
 	@test -f game/simulation/run_simulation.gd || { echo "game/simulation/run_simulation.gd not found"; exit 1; }

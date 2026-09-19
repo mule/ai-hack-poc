@@ -19,6 +19,8 @@ const DEFAULT_TIMEOUT_SEC := 5.0
 
 @onready var renderer: Node2D = $DungeonRenderer
 @onready var ui: Control = $CanvasLayer/UI
+@onready var debug_hud: Control = $CanvasLayer/UI/DebugHUD
+@onready var provider_selector: Control = $CanvasLayer/UI/ProviderSelector
 @onready var camera: Camera2D = $Camera2D
 
 var state: RefCounted
@@ -29,10 +31,20 @@ var generation_transport: Variant = null
 var coordinator: RefCounted = null
 var _seen_revision: int = -1
 
+var selected_provider := ""
+var selected_model := ""
+
 func _ready() -> void:
+	selected_provider = OS.get_environment("DUNGEON_DIRECTOR_PROVIDER").strip_edges()
+	selected_model = OS.get_environment("DUNGEON_DIRECTOR_MODEL").strip_edges()
 	if state == null:
 		state = GameState.new()
+		state.active_provider = selected_provider
+		state.active_model = selected_model
 		state.enable_dynamic_world(1)
+	else:
+		state.active_provider = selected_provider
+		state.active_model = selected_model
 	renderer.game_state = state
 	_setup_generation()
 	
@@ -43,7 +55,15 @@ func _ready() -> void:
 			ui.wait_pressed.connect(_on_wait)
 		if not ui.restart_pressed.is_connected(_on_restart):
 			ui.restart_pressed.connect(_on_restart)
+		if not ui.hud_toggle_pressed.is_connected(_on_hud_toggle):
+			ui.hud_toggle_pressed.connect(_on_hud_toggle)
+		if not ui.provider_select_pressed.is_connected(_on_open_provider_selector):
+			ui.provider_select_pressed.connect(_on_open_provider_selector)
 		ui.update_ui(state)
+
+	if provider_selector:
+		if not provider_selector.selection_applied.is_connected(_on_provider_selection_applied):
+			provider_selector.selection_applied.connect(_on_provider_selection_applied)
 		
 	_center_camera()
 	queue_redraw_all()
@@ -54,9 +74,10 @@ func _setup_generation() -> void:
 	if generation_transport == null:
 		generation_transport = make_transport()
 	coordinator = GenerationCoordinator.new(state, generation_transport)
-	coordinator.provider = OS.get_environment("DUNGEON_DIRECTOR_PROVIDER").strip_edges()
-	coordinator.model = OS.get_environment("DUNGEON_DIRECTOR_MODEL").strip_edges()
+	coordinator.provider = selected_provider
+	coordinator.model = selected_model
 	coordinator.timeout_msec = int(coordinator_timeout_sec() * 1000.0)
+
 
 func _exit_tree() -> void:
 	if coordinator != null:
@@ -84,10 +105,26 @@ func _process(_delta: float) -> void:
 	if coordinator == null:
 		return
 	coordinator.update()
+	if debug_hud and debug_hud.is_hud_visible:
+		debug_hud.update_hud(coordinator, selected_provider, selected_model)
 	if state.world != null and state.world.revision != _seen_revision:
 		queue_redraw_all()
 
 func _unhandled_input(event: InputEvent) -> void:
+	# Debug HUD toggle (Backquote ` or F3)
+	if event is InputEventKey and event.pressed and not event.echo:
+		if event.keycode == KEY_QUOTELEFT or event.keycode == KEY_F3:
+			_on_hud_toggle()
+			if get_viewport():
+				get_viewport().set_input_as_handled()
+			return
+		elif event.keycode == KEY_P:
+			# Shortcut for opening ProviderSelector
+			_on_open_provider_selector()
+			if get_viewport():
+				get_viewport().set_input_as_handled()
+			return
+
 	if event.is_action_pressed("action_restart"):
 		_on_restart()
 		if get_viewport():
@@ -128,7 +165,34 @@ func _on_wait() -> void:
 
 func _on_restart() -> void:
 	state.reset_game()
+	state.active_provider = selected_provider
+	state.active_model = selected_model
+	if coordinator:
+		coordinator.provider = selected_provider
+		coordinator.model = selected_model
+		coordinator.reset_for_current_world()
 	queue_redraw_all()
+
+func _on_hud_toggle() -> void:
+	if debug_hud:
+		debug_hud.toggle_hud()
+		if debug_hud.is_hud_visible:
+			debug_hud.update_hud(coordinator, selected_provider, selected_model)
+
+func _on_open_provider_selector() -> void:
+	if provider_selector:
+		provider_selector.open_selector(generation_transport, selected_provider, selected_model)
+
+func _on_provider_selection_applied(new_provider: String, new_model: String) -> void:
+	selected_provider = new_provider
+	selected_model = new_model
+	state.active_provider = selected_provider
+	state.active_model = selected_model
+	if coordinator:
+		coordinator.provider = selected_provider
+		coordinator.model = selected_model
+	# Reset game / start new run with the selected provider/model
+	_on_restart()
 
 func queue_redraw_all() -> void:
 	if state.world != null:
@@ -137,7 +201,10 @@ func queue_redraw_all() -> void:
 		renderer.queue_redraw()
 	if ui:
 		ui.update_ui(state)
+	if debug_hud and debug_hud.is_hud_visible:
+		debug_hud.update_hud(coordinator, selected_provider, selected_model)
 	_center_camera()
+
 
 func _center_camera() -> void:
 	if camera and state:

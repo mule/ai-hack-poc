@@ -100,6 +100,135 @@ static func parse_room_plan(text: String) -> Dictionary:
 	return {"ok": true, "room": data.value}
 
 
+## Parse and validate a director config response (GET /v1/config JSON text).
+static func parse_director_config(text: String) -> Dictionary:
+	var data := _parse_json_object(text, "config")
+	if not data.ok:
+		return data
+	var validated := validate_director_config(data.value)
+	if not validated.ok:
+		return validated
+	return {"ok": true, "config": data.value}
+
+
+## Validate an already-decoded DirectorConfig dictionary.
+static func validate_director_config(data: Variant) -> Dictionary:
+	var err := _check_keys(data, ["default_provider", "default_model", "providers"], ["shadow"], "config")
+	if err != "":
+		return _fail(err)
+	if not (data.default_provider is String) or not _is_valid_id(data.default_provider):
+		return _fail("config.default_provider: expected an id (1..64 chars, [A-Za-z0-9_.-], starts alphanumeric)")
+	if not (data.default_model is String) or data.default_model.length() < 1 or data.default_model.length() > 128:
+		return _fail("config.default_model: expected 1..128 characters")
+	if not (data.providers is Array):
+		return _fail("config.providers: expected an array")
+	if data.providers.is_empty():
+		return _fail("config.providers: expected at least one provider")
+	var default_found := false
+	var provider_ids: Dictionary = {}
+	for i in data.providers.size():
+		var p_err := _validate_provider_descriptor(data.providers[i], "config.providers[%d]" % i)
+		if p_err != "":
+			return _fail(p_err)
+		var provider: Dictionary = data.providers[i]
+		if provider_ids.has(provider.id):
+			return _fail("config.providers[%d].id: duplicate provider '%s'" % [i, provider.id])
+		provider_ids[provider.id] = true
+		if provider.id == data.default_provider:
+			default_found = true
+			if data.default_model not in provider.models:
+				return _fail("config.default_model must be offered by config.default_provider")
+	if not default_found:
+		return _fail("config.default_provider must identify a listed provider")
+	if data.has("shadow"):
+		var shadow_err := _validate_shadow_config(data.shadow)
+		if shadow_err != "":
+			return _fail(shadow_err)
+	return {"ok": true}
+
+
+static func _validate_provider_descriptor(data: Variant, path: String) -> String:
+	var err := _check_keys(data, ["id", "available", "default_model", "models"], [], path)
+	if err != "":
+		return err
+	if not (data.id is String) or not _is_valid_id(data.id):
+		return "%s.id: expected an id (1..64 chars, [A-Za-z0-9_.-], starts alphanumeric)" % path
+	if not (data.available is bool):
+		return "%s.available: expected a boolean" % path
+	if not (data.default_model is String) or data.default_model.length() < 1 or data.default_model.length() > 128:
+		return "%s.default_model: expected 1..128 characters" % path
+	if not (data.models is Array) or data.models.is_empty():
+		return "%s.models: expected a non-empty array of model ids" % path
+	var found_default := false
+	for m_idx in data.models.size():
+		var m: Variant = data.models[m_idx]
+		if not (m is String) or m.length() < 1 or m.length() > 128:
+			return "%s.models[%d]: expected 1..128 characters" % [path, m_idx]
+		if m == data.default_model:
+			found_default = true
+	if not found_default:
+		return "%s.default_model must be in models" % path
+	return ""
+
+
+static func _validate_shadow_config(data: Variant) -> String:
+	var path := "config.shadow"
+	var err := _check_keys(data, ["targets", "rejected_config_entries"], [], path)
+	if err != "":
+		return err
+	if not (data.targets is Array):
+		return "%s.targets: expected an array" % path
+	for i in data.targets.size():
+		var target_path := "%s.targets[%d]" % [path, i]
+		err = _check_keys(data.targets[i], ["provider"], ["model"], target_path)
+		if err != "":
+			return err
+		var target: Dictionary = data.targets[i]
+		if not (target.provider is String) or not _is_valid_id(target.provider):
+			return "%s.provider: expected a provider id" % target_path
+		if target.has("model") and (not (target.model is String) or target.model.length() < 1 or target.model.length() > 128):
+			return "%s.model: expected 1..128 characters" % target_path
+	if not _is_int_in(data.rejected_config_entries, 0, TURN_MAX):
+		return "%s.rejected_config_entries: expected a non-negative integer" % path
+	return ""
+
+
+## Typed game-side structure for a provider descriptor.
+class ProviderDescriptorData:
+	extends RefCounted
+	var id := ""
+	var available := false
+	var default_model := ""
+	var models: PackedStringArray = []
+
+	static func from_dict(dict: Dictionary) -> ProviderDescriptorData:
+		var desc := ProviderDescriptorData.new()
+		desc.id = String(dict.get("id", ""))
+		desc.available = bool(dict.get("available", false))
+		desc.default_model = String(dict.get("default_model", ""))
+		for m in dict.get("models", []):
+			desc.models.append(String(m))
+		return desc
+
+
+## Typed game-side structure for director configuration.
+class DirectorConfigData:
+	extends RefCounted
+	var default_provider := ""
+	var default_model := ""
+	var providers: Array[ProviderDescriptorData] = []
+
+	static func from_dict(dict: Dictionary) -> DirectorConfigData:
+		var cfg := DirectorConfigData.new()
+		cfg.default_provider = String(dict.get("default_provider", ""))
+		cfg.default_model = String(dict.get("default_model", ""))
+		for p in dict.get("providers", []):
+			if p is Dictionary:
+				cfg.providers.append(ProviderDescriptorData.from_dict(p))
+		return cfg
+
+
+
 ## Validate an already-decoded GenerationResponse dictionary.
 static func validate_generation_response(data: Variant) -> Dictionary:
 	var err := _check_keys(data, ["contract_version", "request_id", "run_id", "metadata"], ["success", "room"], "response")

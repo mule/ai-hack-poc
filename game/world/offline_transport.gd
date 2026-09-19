@@ -14,15 +14,19 @@ extends RefCounted
 var _queue: Array[Callable] = []
 
 
+func fetch_config(on_done: Callable) -> void:
+	_queue.append(func(): on_done.call({"transport_ok": false, "error_kind": "offline", "http_status": 0, "body": ""}))
+
+
 func submit(_request: Dictionary, _options: Dictionary, on_done: Callable) -> void:
-	_queue.append(on_done)
+	_queue.append(func(): on_done.call({"transport_ok": false, "error_kind": "offline", "http_status": 0, "body": ""}))
 
 
 func poll() -> void:
 	var ready := _queue
 	_queue = []
-	for on_done in ready:
-		on_done.call({"transport_ok": false, "error_kind": "offline", "http_status": 0, "body": ""})
+	for cb in ready:
+		cb.call()
 
 
 func cancel_all() -> void:

@@ -7,9 +7,17 @@ extends RefCounted
 
 ## Array of {request, options, on_done, deliveries}
 var submitted: Array[Dictionary] = []
+## Array of Callables waiting for config
+var config_requests: Array[Callable] = []
 ## Optional Callable(request) -> Dictionary result ({} = keep holding).
 var auto: Callable = Callable()
+## Optional config response dictionary to return automatically on poll
+var auto_config: Variant = null
 var cancel_calls := 0
+
+
+func fetch_config(on_done: Callable) -> void:
+	config_requests.append(on_done)
 
 
 func submit(request: Dictionary, options: Dictionary, on_done: Callable) -> void:
@@ -17,6 +25,11 @@ func submit(request: Dictionary, options: Dictionary, on_done: Callable) -> void
 
 
 func poll() -> void:
+	if auto_config != null:
+		var c_reqs := config_requests.duplicate()
+		config_requests.clear()
+		for cb in c_reqs:
+			cb.call(auto_config)
 	if not auto.is_valid():
 		return
 	for item in submitted:
@@ -25,6 +38,7 @@ func poll() -> void:
 			if not result.is_empty():
 				item.deliveries += 1
 				item.on_done.call(result)
+
 
 
 func cancel_all() -> void:
@@ -36,6 +50,14 @@ func deliver(index: int, result: Dictionary) -> void:
 	var item: Dictionary = submitted[index]
 	item.deliveries += 1
 	item.on_done.call(result)
+
+
+func deliver_config(result: Dictionary) -> void:
+	var reqs := config_requests.duplicate()
+	config_requests.clear()
+	for cb in reqs:
+		cb.call(result)
+
 
 
 func request_ids() -> Array[String]:

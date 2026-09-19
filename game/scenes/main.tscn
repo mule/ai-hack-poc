@@ -3,6 +3,8 @@
 [ext_resource type="Script" path="res://src/main_game.gd" id="1_main"]
 [ext_resource type="Script" path="res://src/dungeon_renderer.gd" id="2_rend"]
 [ext_resource type="Script" path="res://src/game_ui.gd" id="3_ui"]
+[ext_resource type="Script" path="res://src/debug_hud.gd" id="4_hud"]
+[ext_resource type="Script" path="res://src/provider_selector.gd" id="5_sel"]
 
 [sub_resource type="StyleBoxFlat" id="StyleBoxFlat_panel"]
 bg_color = Color(0.08, 0.09, 0.12, 0.85)
@@ -66,6 +68,11 @@ show_percentage = false
 layout_mode = 2
 size_flags_horizontal = 3
 text = "ATK: 4 | Turn: 0 | Score: 0"
+
+[node name="ProviderLabel" type="Label" parent="CanvasLayer/UI/TopBar/HBox"]
+layout_mode = 2
+theme_override_colors/font_color = Color(0.6, 0.85, 1.0, 1)
+text = "[rules-baseline]"
 
 [node name="LogPanel" type="PanelContainer" parent="CanvasLayer/UI"]
 layout_mode = 1
@@ -173,6 +180,175 @@ grow_vertical = 2
 focus_mode = 0
 text = "Wait"
 
+[node name="HudBtn" type="Button" parent="CanvasLayer/UI/TouchControls"]
+layout_mode = 1
+offset_left = 10.0
+offset_top = 10.0
+offset_right = 60.0
+offset_bottom = 45.0
+focus_mode = 0
+text = "HUD"
+
+[node name="ProviderBtn" type="Button" parent="CanvasLayer/UI/TouchControls"]
+layout_mode = 1
+offset_left = -70.0
+offset_top = 10.0
+offset_right = -10.0
+offset_bottom = 45.0
+focus_mode = 0
+text = "CFG"
+
+[node name="DebugHUD" type="Control" parent="CanvasLayer/UI"]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+mouse_filter = 2
+script = ExtResource("4_hud")
+
+[node name="Panel" type="PanelContainer" parent="CanvasLayer/UI/DebugHUD"]
+visible = false
+layout_mode = 1
+anchors_preset = 11
+anchor_left = 1.0
+anchor_right = 1.0
+anchor_bottom = 1.0
+offset_left = -460.0
+offset_top = 50.0
+offset_right = -10.0
+offset_bottom = -220.0
+grow_horizontal = 0
+grow_vertical = 2
+theme_override_styles/panel = SubResource("StyleBoxFlat_panel")
+
+[node name="VBox" type="VBoxContainer" parent="CanvasLayer/UI/DebugHUD/Panel"]
+layout_mode = 2
+
+[node name="Header" type="HBoxContainer" parent="CanvasLayer/UI/DebugHUD/Panel/VBox"]
+layout_mode = 2
+
+[node name="TitleLabel" type="Label" parent="CanvasLayer/UI/DebugHUD/Panel/VBox/Header"]
+layout_mode = 2
+size_flags_horizontal = 3
+theme_override_colors/font_color = Color(1, 0.85, 0.4, 1)
+text = "  Telemetry & Decisions"
+
+[node name="CloseBtn" type="Button" parent="CanvasLayer/UI/DebugHUD/Panel/VBox/Header"]
+custom_minimum_size = Vector2(32, 28)
+layout_mode = 2
+focus_mode = 0
+text = "X"
+
+[node name="Scroll" type="ScrollContainer" parent="CanvasLayer/UI/DebugHUD/Panel/VBox"]
+layout_mode = 2
+size_flags_vertical = 3
+
+[node name="ContentLabel" type="RichTextLabel" parent="CanvasLayer/UI/DebugHUD/Panel/VBox/Scroll"]
+layout_mode = 2
+size_flags_horizontal = 3
+size_flags_vertical = 3
+bbcode_enabled = true
+text = "Telemetry data..."
+scroll_following = true
+
+[node name="ProviderSelector" type="Control" parent="CanvasLayer/UI"]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+mouse_filter = 2
+script = ExtResource("5_sel")
+
+[node name="Panel" type="PanelContainer" parent="CanvasLayer/UI/ProviderSelector"]
+visible = false
+layout_mode = 1
+anchors_preset = 8
+anchor_left = 0.5
+anchor_top = 0.5
+anchor_right = 0.5
+anchor_bottom = 0.5
+offset_left = -220.0
+offset_top = -140.0
+offset_right = 220.0
+offset_bottom = 140.0
+grow_horizontal = 2
+grow_vertical = 2
+theme_override_styles/panel = SubResource("StyleBoxFlat_panel")
+
+[node name="VBox" type="VBoxContainer" parent="CanvasLayer/UI/ProviderSelector/Panel"]
+layout_mode = 2
+theme_override_constants/separation = 12
+
+[node name="Title" type="Label" parent="CanvasLayer/UI/ProviderSelector/Panel/VBox"]
+layout_mode = 2
+theme_override_colors/font_color = Color(1, 0.85, 0.4, 1)
+theme_override_font_sizes/font_size = 18
+text = "Director Provider & Model Selector"
+horizontal_alignment = 1
+
+[node name="ProviderRow" type="HBoxContainer" parent="CanvasLayer/UI/ProviderSelector/Panel/VBox"]
+layout_mode = 2
+theme_override_constants/separation = 8
+
+[node name="Label" type="Label" parent="CanvasLayer/UI/ProviderSelector/Panel/VBox/ProviderRow"]
+custom_minimum_size = Vector2(80, 0)
+layout_mode = 2
+text = "Provider:"
+
+[node name="ProviderOption" type="OptionButton" parent="CanvasLayer/UI/ProviderSelector/Panel/VBox/ProviderRow"]
+layout_mode = 2
+size_flags_horizontal = 3
+focus_mode = 0
+
+[node name="ModelRow" type="HBoxContainer" parent="CanvasLayer/UI/ProviderSelector/Panel/VBox"]
+layout_mode = 2
+theme_override_constants/separation = 8
+
+[node name="Label" type="Label" parent="CanvasLayer/UI/ProviderSelector/Panel/VBox/ModelRow"]
+custom_minimum_size = Vector2(80, 0)
+layout_mode = 2
+text = "Model:"
+
+[node name="ModelOption" type="OptionButton" parent="CanvasLayer/UI/ProviderSelector/Panel/VBox/ModelRow"]
+layout_mode = 2
+size_flags_horizontal = 3
+focus_mode = 0
+
+[node name="StatusLabel" type="Label" parent="CanvasLayer/UI/ProviderSelector/Panel/VBox"]
+custom_minimum_size = Vector2(0, 36)
+layout_mode = 2
+theme_override_colors/font_color = Color(0.8, 0.8, 0.8, 1)
+theme_override_font_sizes/font_size = 12
+text = "Status: Ready"
+autowrap_mode = 3
+
+[node name="ButtonRow" type="HBoxContainer" parent="CanvasLayer/UI/ProviderSelector/Panel/VBox"]
+layout_mode = 2
+theme_override_constants/separation = 12
+alignment = 1
+
+[node name="RefreshBtn" type="Button" parent="CanvasLayer/UI/ProviderSelector/Panel/VBox/ButtonRow"]
+custom_minimum_size = Vector2(80, 32)
+layout_mode = 2
+focus_mode = 0
+text = "Refresh"
+
+[node name="CancelBtn" type="Button" parent="CanvasLayer/UI/ProviderSelector/Panel/VBox/ButtonRow"]
+custom_minimum_size = Vector2(80, 32)
+layout_mode = 2
+focus_mode = 0
+text = "Cancel"
+
+[node name="ApplyBtn" type="Button" parent="CanvasLayer/UI/ProviderSelector/Panel/VBox/ButtonRow"]
+custom_minimum_size = Vector2(90, 32)
+layout_mode = 2
+focus_mode = 0
+text = "Apply"
+
 [node name="DeathOverlay" type="ColorRect" parent="CanvasLayer/UI"]
 visible = false
 layout_mode = 1
@@ -217,4 +393,6 @@ text = "Restart (R)"
 [connection signal="pressed" from="CanvasLayer/UI/TouchControls/LeftBtn" to="CanvasLayer/UI" method="_on_left_button_pressed"]
 [connection signal="pressed" from="CanvasLayer/UI/TouchControls/RightBtn" to="CanvasLayer/UI" method="_on_right_button_pressed"]
 [connection signal="pressed" from="CanvasLayer/UI/TouchControls/WaitBtn" to="CanvasLayer/UI" method="_on_wait_button_pressed"]
+[connection signal="pressed" from="CanvasLayer/UI/TouchControls/HudBtn" to="CanvasLayer/UI" method="_on_hud_button_pressed"]
+[connection signal="pressed" from="CanvasLayer/UI/TouchControls/ProviderBtn" to="CanvasLayer/UI" method="_on_provider_button_pressed"]
 [connection signal="pressed" from="CanvasLayer/UI/DeathOverlay/VBox/RestartBtn" to="CanvasLayer/UI" method="_on_restart_button_pressed"]

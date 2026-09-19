@@ -18,10 +18,26 @@ extends Node
 ##   error_kind          "timeout" | "transport_failure" | "request_failed"
 
 const GENERATE_PATH := "/v1/generate"
+const CONFIG_PATH := "/v1/config"
 const MAX_BODY_BYTES := 1_048_576
 
 var base_url := "http://127.0.0.1:8000"
 var timeout_sec := 5.0
+
+
+func fetch_config(on_done: Callable) -> void:
+	var http := HTTPRequest.new()
+	http.timeout = timeout_sec
+	http.body_size_limit = MAX_BODY_BYTES
+	add_child(http)
+	http.request_completed.connect(_on_completed.bind(http, on_done), CONNECT_ONE_SHOT)
+	var headers := PackedStringArray(["Accept: application/json"])
+	var url := base_url.rstrip("/") + CONFIG_PATH
+	var err := http.request(url, headers, HTTPClient.METHOD_GET)
+	if err != OK:
+		http.queue_free()
+		on_done.call_deferred(_failure("request_failed"))
+
 
 
 func submit(request: Dictionary, options: Dictionary, on_done: Callable) -> void:

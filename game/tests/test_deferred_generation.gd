@@ -64,6 +64,7 @@ func _run() -> void:
 	await _step("test_restart_in_main_scene", _test_restart_in_main_scene)
 	await _step("test_shutdown_cancels_in_flight_requests", _test_shutdown_cancels_in_flight_requests)
 	await _step("test_http_client", _test_http_client)
+	await _step("test_http_client_fetch_config", _test_http_client_fetch_config)
 	await _step("test_coordinator_over_real_http", _test_coordinator_over_real_http)
 	await _step("test_generation_recording", _test_generation_recording)
 	await _step("test_recorder_preserves_resolved_provider_and_metadata", _test_recorder_preserves_resolved_provider_and_metadata)
@@ -699,7 +700,59 @@ func _test_http_client() -> void:
 	_end()
 
 
+func _test_http_client_fetch_config() -> void:
+	print("\nTest: HTTP client speaks GET /v1/config asynchronously")
+	await _settle_frames()
+	var server := MiniHttpServer.new()
+	_check(server.start(), "loopback test server started for config")
+	var client := GenerationClient.new()
+	client.base_url = "http://127.0.0.1:%d" % server.port
+	client.timeout_sec = 0.5
+	root.add_child(client)
+
+	var valid_config := {
+		"default_provider": "rules-baseline",
+		"default_model": "builtin-v1",
+		"providers": [
+			{
+				"id": "rules-baseline",
+				"available": true,
+				"default_model": "builtin-v1",
+				"models": ["builtin-v1"]
+			}
+		]
+	}
+	server.response_body = JSON.stringify(valid_config)
+
+	var results: Array[Dictionary] = []
+	client.fetch_config(func(r: Dictionary) -> void: results.append(r))
+	_check(results.is_empty(), "fetch_config returns before network response")
+	_check(await _wait_until(func(): return _served(server, results, 1)), "config response delivered asynchronously")
+
+	var seen: Dictionary = server.requests[0]
+	_check_eq(seen.method, "GET", "fetch_config uses GET")
+	_check_eq(seen.target, "/v1/config", "target is /v1/config")
+	_check_eq(results[0].transport_ok, true, "transport ok")
+	_check_eq(results[0].http_status, 200, "status 200")
+
+	var parsed := DungeonContracts.parse_director_config(results[0].body)
+	_check(parsed.ok, "config body parsed via DungeonContracts")
+	_check_eq(parsed.config.default_provider, "rules-baseline", "default_provider correct")
+
+	# Server error -> reported with status code
+	server.response_status = 503
+	server.response_body = "service unavailable"
+	client.fetch_config(func(r: Dictionary) -> void: results.append(r))
+	_check(await _wait_until(func(): return _served(server, results, 2)), "503 error delivered")
+	_check_eq(results[1].http_status, 503, "status 503 reported")
+
+	server.stop()
+	client.queue_free()
+	_end()
+
+
 func _test_coordinator_over_real_http() -> void:
+
 	print("\nTest: coordinator + real client + loopback server commit and fall back asynchronously")
 	await _settle_frames()
 	var server := MiniHttpServer.new()
@@ -767,6 +820,9 @@ func _test_generation_recording() -> void:
 	env.transport.deliver(0, StubDirector.success_result(request, plan))
 	env.coord.update()
 	_check_eq(env.state.world.get_frontier(NORTH).status, DungeonWorld.STATUS_COMMITTED, "north committed")
+	env.state.reset_game()
+	env.coord.reset_for_current_world()
+	_check(rec.is_active(), "recorder remains active across a run restart")
 	rec.close()
 
 	_check(FileAccess.file_exists(log_path), "JSONL file exists on disk")
@@ -880,8 +936,13 @@ func _test_recorder_captures_failure_envelope_and_fallback_without_secrets() -> 
 			},
 		},
 	}
-	# Transport delivers HTTP 502 with canonical failure envelope
-	env.transport.deliver(0, StubDirector.ok_result(JSON.stringify(failure_body_dict), 502))
+	# Transport-only fields model request-library diagnostics that must never be
+	# copied into the canonical recording.
+	var transport_result := StubDirector.ok_result(JSON.stringify(failure_body_dict), 502)
+	transport_result["request_headers"] = {"Authorization": "Bearer recording-canary"}
+	transport_result["api_key"] = "sk-recording-canary"
+	# Transport delivers HTTP 502 with canonical failure envelope.
+	env.transport.deliver(0, transport_result)
 	env.coord.update()
 
 	# World should fall back and commit local rules baseline
@@ -904,9 +965,8 @@ func _test_recorder_captures_failure_envelope_and_fallback_without_secrets() -> 
 		var err: Dictionary = resp_meta.get("error", {})
 		_check_eq(err.get("code", ""), "schema_violation", "error code matches")
 		_check_eq(err.get("message", ""), "Provider output did not match the room contract.", "error message matches")
-		# Confirm no secrets leaked: raw string check
-		_check(not line.contains("sk-"), "no api keys leaked in JSON line")
-		_check(not line.contains("Bearer"), "no auth tokens leaked in JSON line")
+		_check(not line.contains("sk-recording-canary"), "transport api key is excluded from JSONL")
+		_check(not line.contains("Bearer recording-canary"), "transport auth header is excluded from JSONL")
 	file.close()
 	DirAccess.remove_absolute(ProjectSettings.globalize_path(log_path))
 	_end()

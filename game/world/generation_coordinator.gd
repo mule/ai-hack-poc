@@ -47,6 +47,16 @@ var clock: Callable = Callable()
 ## Room types the world cannot use (vertical connections are unsupported).
 var forbidden_room_types: Array = ["stairs_down", "stairs_up"]
 
+## Latest completed generation and a bounded per-run decision history for the
+## debug HUD. Provider metadata remains opaque to gameplay.
+var last_generation_status := "idle"
+var last_latency_ms := -1.0
+var last_provider := ""
+var last_model := ""
+var last_provider_metadata: Dictionary = {}
+var recent_decisions: Array[Dictionary] = []
+const MAX_RECENT_DECISIONS := 10
+
 ## request_id -> {key, started, request}
 var in_flight: Dictionary = {}
 
@@ -76,11 +86,23 @@ func update() -> void:
 ## Stop generating: forget in-flight requests and cancel them on the transport
 ## so no completion callback can reach this (soon to be freed) coordinator.
 func shutdown() -> void:
+	_cancel_active_requests()
+	if recorder != null and recorder.has_method("close"):
+		recorder.close()
+
+
+func _cancel_active_requests() -> void:
 	in_flight.clear()
 	_handled.clear()
 	transport.cancel_all()
-	if recorder != null and recorder.has_method("close"):
-		recorder.close()
+
+
+## Rebind after GameState creates a new run. Recording remains active across
+## restarts, while requests and HUD history from the old run are discarded.
+func reset_for_current_world() -> void:
+	_cancel_active_requests()
+	_bound_world = game_state.world
+	_reset_hud_state()
 
 
 func request_count() -> int:
@@ -183,12 +205,13 @@ func _start(f: Dictionary) -> void:
 	var request_id := "req-%s-%d" % [world.run_id, _serial]
 	if not world.begin_generation(f.key, request_id):
 		return
+	last_generation_status = "generating"
 	var request := build_request(f, request_id)
 	in_flight[request_id] = {"key": f.key, "started": _now(), "request": request}
 	var validation := DungeonContracts.validate_generation_request(request)
 	if not validation.ok:
-		_finish(request_id)
-		_fallback(f, request_id, "invalid_request: %s" % validation.error, request)
+		var finish_info := _finish(request_id)
+		_fallback(f, request_id, "invalid_request: %s" % validation.error, request, {}, finish_info.elapsed)
 		return
 	var options := {"provider": provider, "model": model, "timeout_sec": timeout_msec / 1000.0}
 	transport.submit(request, options, _on_result.bind(request_id, world))
@@ -197,22 +220,33 @@ func _start(f: Dictionary) -> void:
 func _expire_deadlines() -> void:
 	var now := _now()
 	for request_id in in_flight.keys():
-		if now - int(in_flight[request_id].started) >= timeout_msec:
-			var req_data: Dictionary = in_flight[request_id]
+		var req_data: Dictionary = in_flight[request_id]
+		var started := int(req_data.get("started", now))
+		if now - started >= timeout_msec:
 			var key: String = req_data.key
 			var request: Dictionary = req_data.get("request", {})
-			_finish(request_id)
-			_fallback(game_state.world.get_frontier(key), request_id, "timeout", request)
+			var finish_info := _finish(request_id)
+			_fallback(game_state.world.get_frontier(key), request_id, "timeout", request, {}, finish_info.elapsed)
 
 
 func _sync_world() -> void:
 	if game_state.world != _bound_world:
-		shutdown()
-		_bound_world = game_state.world
+		reset_for_current_world()
+
+
+func _reset_hud_state() -> void:
+	last_generation_status = "idle"
+	last_latency_ms = -1.0
+	last_provider = ""
+	last_model = ""
+	last_provider_metadata.clear()
+	recent_decisions.clear()
 
 
 func _finish(request_id: String) -> Dictionary:
 	var req_data: Dictionary = in_flight.get(request_id, {})
+	var started := int(req_data.get("started", _now()))
+	req_data["elapsed"] = float(_now() - started)
 	in_flight.erase(request_id)
 	_handled[request_id] = req_data
 	if _handled.size() > HANDLED_LIMIT:
@@ -229,10 +263,10 @@ func _on_result(result: Dictionary, request_id: String, world: RefCounted) -> vo
 	var current: DungeonWorld = game_state.world
 	if in_flight.has(request_id):
 		var req_data := _finish(request_id)
-		_resolve(current.get_frontier(req_data.key), request_id, result, false, req_data.get("request", {}))
+		_resolve(current.get_frontier(req_data.key), request_id, result, false, req_data.get("request", {}), req_data.elapsed)
 	elif _handled.has(request_id):
 		var req_data: Dictionary = _handled[request_id]
-		_resolve(current.get_frontier(req_data.key), request_id, result, true, req_data.get("request", {}))
+		_resolve(current.get_frontier(req_data.key), request_id, result, true, req_data.get("request", {}), req_data.get("elapsed", -1.0))
 	else:
 		current.counters.stale += 1
 		current.log_event("stale", "", {"request_id": request_id, "reason": "unknown_request"})
@@ -240,29 +274,36 @@ func _on_result(result: Dictionary, request_id: String, world: RefCounted) -> vo
 
 ## `late` responses (after a timeout/duplicate delivery) are still offered to
 ## the world, which refuses them because the frontier is no longer pending.
-func _resolve(f: Dictionary, request_id: String, result: Dictionary, late: bool, request: Dictionary = {}) -> void:
+func _resolve(f: Dictionary, request_id: String, result: Dictionary, late: bool, request: Dictionary = {}, elapsed_ms: float = -1.0) -> void:
 	var interpreted := _interpret(result, request_id)
 	var resp_meta: Dictionary = interpreted.get("metadata", {})
 	if not interpreted.ok:
 		if late:
 			game_state.world.log_event("late_invalid", f.key, {"request_id": request_id, "reason": interpreted.reason})
 		else:
-			_fallback(f, request_id, interpreted.reason, request, resp_meta)
+			_fallback(f, request_id, interpreted.reason, request, resp_meta, elapsed_ms)
 		return
 	var plan: Dictionary = interpreted.plan
 	var placed: Dictionary
 	if int(plan.depth) != WORLD_DEPTH:
 		placed = {"ok": false, "outcome": "rejected", "reason": "depth_mismatch"}
 	else:
-		placed = _place_plan(f, request_id, plan, "director", {})
+		placed = _place_plan(f, request_id, plan, "director", resp_meta)
 	if placed.ok:
 		if recorder != null and not request.is_empty():
 			var room_seed := int(placed.get("room", {}).get("seed_used", game_state.world_seed))
 			recorder.record_entry(request, provider, model, "committed", "director", room_seed, plan, "", placed.get("room", {}).get("meta", {}), resp_meta)
+		if not late:
+			last_generation_status = "committed"
+			last_provider = str(resp_meta.get("provider", provider))
+			last_model = str(resp_meta.get("model", model))
+			last_latency_ms = float(resp_meta.latency_ms) if resp_meta.get("latency_ms") != null else elapsed_ms
+			last_provider_metadata = resp_meta.get("provider_metadata", {}).duplicate(true)
+			_record_decision(plan, "director", resp_meta)
 		return
 	if late or placed.outcome != "rejected":
 		return
-	_fallback(f, request_id, "plan_rejected:%s" % placed.reason, request, resp_meta)
+	_fallback(f, request_id, "plan_rejected:%s" % placed.reason, request, resp_meta, elapsed_ms)
 
 
 
@@ -338,26 +379,69 @@ func _place_plan(f: Dictionary, request_id: String, plan: Dictionary, source: St
 
 
 ## Deterministic local plan -> commit; last resort seals the exit.
-func _fallback(f: Dictionary, request_id: String, reason: String, request: Dictionary = {}, response_metadata: Dictionary = {}) -> void:
+func _fallback(
+	f: Dictionary,
+	request_id: String,
+	reason: String,
+	request: Dictionary = {},
+	response_metadata: Dictionary = {},
+	elapsed_ms: float = -1.0
+) -> void:
 	var world: DungeonWorld = game_state.world
 	if f.is_empty() or f.status != DungeonWorld.STATUS_PENDING or f.request_id != request_id:
 		return
 	world.note_fallback(f.key, reason, {"request_id": request_id})
 	print("[dungeon-gen] fallback for %s: %s" % [f.key, reason])
 	game_state.log_message("Generation fell back to local rules (%s)." % reason.get_slice(":", 0))
+	last_provider = "rules-baseline"
+	last_model = "builtin-v1"
+	last_latency_ms = elapsed_ms if elapsed_ms >= 0.0 else -1.0
+	last_provider_metadata = {"fallback_reason": reason}
+	var fallback_metadata := {
+		"fallback_reason": reason,
+		"provider": last_provider,
+		"model": last_model,
+		"latency_ms": last_latency_ms,
+		"provider_metadata": last_provider_metadata.duplicate(true),
+	}
 	var req := request if not request.is_empty() else build_request(f, request_id)
 	for variant in ["standard", "minimal"]:
 		var plan := RulesBaseline.plan_for(req, _fallback_room_id(world), variant)
-		var placed := _place_plan(f, request_id, plan, "fallback", {"fallback_reason": reason})
-		if placed.ok or placed.outcome != "rejected":
-			if placed.ok and recorder != null and not req.is_empty():
+		var placed := _place_plan(f, request_id, plan, "fallback", fallback_metadata)
+		if placed.ok:
+			if recorder != null and not req.is_empty():
 				var room_seed := int(placed.get("room", {}).get("seed_used", game_state.world_seed))
 				recorder.record_entry(req, provider, model, "fallback", "fallback", room_seed, plan, reason, placed.get("room", {}).get("meta", {}), response_metadata)
+			last_generation_status = "fallback"
+			_record_decision(plan, "fallback", fallback_metadata)
+			return
+		if placed.outcome != "rejected":
 			return
 	world.seal_frontier(f.key, request_id, "no_placement_fits")
 	if recorder != null and not req.is_empty():
 		recorder.record_entry(req, provider, model, "sealed", "sealed", game_state.world_seed, {}, "no_placement_fits", {}, response_metadata)
+	last_generation_status = "failed"
 	game_state.log_message("The passage collapses; that exit is sealed.")
+
+
+func _record_decision(plan: Dictionary, source: String, metadata: Dictionary) -> void:
+	var entry := {
+		"room_id": str(plan.get("room_id", "")),
+		"depth": int(plan.get("depth", 1)),
+		"room_type": str(plan.get("room_type", "room")),
+		"size": str(plan.get("size", "medium")),
+		"danger": int(plan.get("danger", 1)),
+		"exits": plan.get("exits", []).duplicate(true),
+		"source": source,
+		"provider": str(metadata.get("provider", last_provider)),
+		"model": str(metadata.get("model", last_model)),
+		"latency_ms": float(metadata.get("latency_ms", last_latency_ms)),
+		"provider_metadata": metadata.get("provider_metadata", {}).duplicate(true),
+		"turn": game_state.player_turns if game_state else 0,
+	}
+	recent_decisions.append(entry)
+	if recent_decisions.size() > MAX_RECENT_DECISIONS:
+		recent_decisions.pop_front()
 
 
 func _fallback_room_id(world: DungeonWorld) -> String:
