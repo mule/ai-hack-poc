@@ -19,6 +19,7 @@ from fakes import (
 )
 from fastapi.testclient import TestClient
 
+from dungeon_director import groq
 from dungeon_director.app import create_app
 from dungeon_director.contracts import (
     CONTRACT_VERSION,
@@ -30,6 +31,7 @@ from dungeon_director.contracts import (
     RoomPlan,
 )
 from dungeon_director.errors import ProviderError
+from dungeon_director.groq import GroqTransportResponse
 from dungeon_director.providers import DungeonDirectorProvider
 from dungeon_director.registry import ProviderRegistry, default_registry
 from dungeon_director.settings import DirectorSettings
@@ -113,12 +115,25 @@ def test_config_and_generate_never_expose_credentials(monkeypatch):
         monkeypatch.setenv(name, secret)
     client = TestClient(create_app())
 
+    class EchoingGroqTransport:
+        """Offline stand-in for the real Groq client: rejects the key and echoes it."""
+
+        async def send(self, request):
+            body = json.dumps({"error": {"message": f"invalid key {secret}"}}).encode()
+            return GroqTransportResponse(status_code=401, headers={}, body=body)
+
+    monkeypatch.setattr(groq, "HttpxGroqTransport", EchoingGroqTransport)
+
+    groq_response = client.post("/v1/generate?provider=groq", json=request_payload())
+    assert groq_response.status_code == 502, "the request must reach the (stubbed) Groq adapter"
+    assert groq_response.json()["metadata"]["error"]["code"] == "provider_error"
+
     bodies = [
         client.get("/health").text,
         client.get("/v1/config").text,
         client.get("/openapi.json").text,
         client.post("/v1/generate", json=request_payload()).text,
-        client.post("/v1/generate?provider=groq", json=request_payload()).text,
+        groq_response.text,
         client.post("/v1/generate", content=b"{not json").text,
     ]
 

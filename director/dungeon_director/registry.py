@@ -23,6 +23,7 @@ from dungeon_director.errors import (
     ProviderSelectionError,
     SelectionReason,
 )
+from dungeon_director.groq import GroqProvider
 from dungeon_director.providers import DungeonDirectorProvider, ProviderAvailability
 from dungeon_director.rules import RulesProvider
 
@@ -176,23 +177,38 @@ class ProviderRegistry:
 def default_registry() -> ProviderRegistry:
     """The registry the service starts with.
 
-    The offline rules baseline is always available. The Cloudflare Jev
-    adapter is always registered too, but reports itself unavailable until
-    ``CLOUDFLARE_ACCOUNT_ID`` and ``CLOUDFLARE_API_TOKEN`` are configured, so
-    a checkout without credentials keeps working with the offline default.
+    The offline rules baseline is always available. The optional hosted
+    providers (Cloudflare Jev, Groq) are always registered too, but report
+    themselves unavailable until their credentials are configured, so a
+    checkout without credentials keeps working with the offline default.
     """
     registry = ProviderRegistry()
     registry.register(RulesProvider())
+    for provider_type in (CloudflareJevProvider, GroqProvider):
+        _register_optional(registry, provider_type)
+    return registry
+
+
+def _register_optional(
+    registry: ProviderRegistry,
+    provider_type: type[CloudflareJevProvider] | type[GroqProvider],
+) -> None:
+    """Register an environment-configured provider without letting it stop startup.
+
+    These providers are optional while rules-baseline is the default. A typo in
+    their environment (bad URL, model id, effort, token budget, key) must not
+    take the offline service down: the provider is registered from an empty
+    environment instead, so it reports unavailable and selecting it fails as
+    unavailable. Only the exception type and provider id are logged, because
+    configuration text can contain credential material.
+    """
     try:
-        registry.register(CloudflareJevProvider.from_env())
+        registry.register(provider_type.from_env())
     except DirectorConfigError as exc:
-        # Jev is optional while rules-baseline is the default. A typo in its
-        # environment must not take the offline service down; selecting Jev
-        # still fails as unavailable. Log only the exception type because
-        # configuration text can contain credential material.
+        disabled = provider_type.from_env({})
         logger.warning(
-            "invalid optional cloudflare-jev configuration; provider disabled (%s)",
+            "invalid optional %s configuration; provider disabled (%s)",
+            disabled.provider_id,
             type(exc).__name__,
         )
-        registry.register(CloudflareJevProvider.from_env({}))
-    return registry
+        registry.register(disabled)

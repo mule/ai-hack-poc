@@ -3,10 +3,16 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 
 import pytest
-from fakes import BrokenAvailabilityProvider, FakeProvider, GarbageAvailabilityProvider
+from fakes import (
+    BrokenAvailabilityProvider,
+    FakeProvider,
+    GarbageAvailabilityProvider,
+    request_payload,
+)
 
 from dungeon_director.errors import (
     DirectorConfigError,
@@ -23,16 +29,21 @@ def registry_with(*providers: FakeProvider) -> ProviderRegistry:
     return registry
 
 
-def test_default_registry_offers_rules_plus_unconfigured_cloudflare_jev(monkeypatch):
+def test_default_registry_offers_rules_plus_unconfigured_optional_providers(monkeypatch):
     for name in ("CLOUDFLARE_ACCOUNT_ID", "CLOUDFLARE_API_TOKEN"):
         monkeypatch.delenv(name, raising=False)
     registry = default_registry()
 
     described = {d.id: d for d in registry.describe()}
 
-    assert set(described) == {"rules-baseline", "cloudflare-jev"}
+    assert set(described) == {"rules-baseline", "cloudflare-jev", "groq"}
     assert described["rules-baseline"].available is True
     assert described["cloudflare-jev"].available is False
+    assert described["groq"].available is False
+    assert described["groq"].default_model == "openai/gpt-oss-20b"
+    with pytest.raises(ProviderSelectionError) as info:
+        registry.select("groq", None)
+    assert info.value.reason is SelectionReason.PROVIDER_UNAVAILABLE
     assert registry.select("rules-baseline", None).model == "builtin-v1"
 
 
@@ -49,6 +60,85 @@ def test_invalid_optional_jev_environment_does_not_break_the_offline_default(mon
     logged = "\n".join(record.getMessage() for record in caplog.records)
     assert "secret-that-must-not-be-logged" not in logged
     assert "invalid account/id" not in logged
+
+
+def test_groq_becomes_available_with_a_key_and_follows_the_configured_model(monkeypatch):
+    monkeypatch.setenv("GROQ_API_KEY", "gsk-test-key")
+    monkeypatch.setenv("GROQ_MODEL", "openai/gpt-oss-120b")
+
+    registry = default_registry()
+
+    described = {item.id: item for item in registry.describe()}
+    assert described["groq"].available is True
+    assert described["groq"].models == ["openai/gpt-oss-120b"]
+    assert registry.select("groq", None).model == "openai/gpt-oss-120b"
+    assert "gsk-test-key" not in json.dumps([item.model_dump() for item in registry.describe()])
+
+
+@pytest.mark.parametrize(
+    ("name", "value"),
+    [
+        ("GROQ_REASONING_EFFORT", "none"),
+        ("GROQ_REASONING_EFFORT", "turbo"),
+        ("GROQ_API_BASE_URL", "http://remote.example/openai/v1"),
+        ("GROQ_API_BASE_URL", "not a url"),
+        ("GROQ_MAX_COMPLETION_TOKENS", "not-an-int"),
+        ("GROQ_MAX_COMPLETION_TOKENS", "-7331"),
+        ("GROQ_MODEL", "bad model id"),
+        ("GROQ_API_KEY", "key with spaces"),
+    ],
+)
+def test_malformed_optional_groq_config_keeps_the_rules_baseline_starting(
+    monkeypatch, caplog, name, value
+):
+    from fastapi.testclient import TestClient
+
+    from dungeon_director.app import create_app
+
+    secret = "gsk-secret-that-must-not-be-logged"
+    monkeypatch.setenv("GROQ_API_KEY", secret)
+    monkeypatch.setenv(name, value)
+
+    with caplog.at_level(logging.DEBUG):
+        registry = default_registry()
+        with TestClient(create_app(registry=registry)) as client:
+            config = client.get("/v1/config").json()
+            generated = client.post("/v1/generate", json=request_payload())
+
+    described = {item.id: item for item in registry.describe()}
+    assert described["rules-baseline"].available is True
+    assert described["groq"].available is False
+    assert config["default_provider"] == "rules-baseline"
+    assert generated.status_code == 200 and generated.json()["success"] is True
+    with pytest.raises(ProviderSelectionError):
+        registry.select("groq", None)
+    logged = "\n".join(record.getMessage() for record in caplog.records)
+    assert secret not in logged
+    assert value not in logged
+    assert "groq" in logged and "provider disabled" in logged
+
+
+def test_a_malformed_groq_config_does_not_disable_a_valid_jev_config(monkeypatch):
+    monkeypatch.setenv("CLOUDFLARE_ACCOUNT_ID", "acct-1")
+    monkeypatch.setenv("CLOUDFLARE_API_TOKEN", "token")
+    monkeypatch.setenv("GROQ_API_KEY", "gsk-test")
+    monkeypatch.setenv("GROQ_REASONING_EFFORT", "none")
+
+    described = {item.id: item for item in default_registry().describe()}
+
+    assert described["cloudflare-jev"].available is True
+    assert described["groq"].available is False
+
+
+def test_a_malformed_jev_config_does_not_disable_a_valid_groq_config(monkeypatch):
+    monkeypatch.setenv("CLOUDFLARE_ACCOUNT_ID", "invalid account/id")
+    monkeypatch.setenv("CLOUDFLARE_API_TOKEN", "token")
+    monkeypatch.setenv("GROQ_API_KEY", "gsk-test")
+
+    described = {item.id: item for item in default_registry().describe()}
+
+    assert described["cloudflare-jev"].available is False
+    assert described["groq"].available is True
 
 
 def test_select_returns_provider_and_its_default_model():

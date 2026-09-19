@@ -655,3 +655,125 @@ def test_non_json_mapping_output_is_a_502_schema_violation_not_a_500(payload):
 
     assert_canonical_failure(outcome, code=ErrorKind.SCHEMA_VIOLATION, status=502)
     assert outcome.response.metadata.error.raw_excerpt is not None
+
+
+# --- telemetry survives a rejected provider result ----------------------------
+
+
+def _usage() -> UsageStats:
+    return UsageStats(input_tokens=812, output_tokens=231)
+
+
+@pytest.mark.parametrize(
+    ("payload", "code"),
+    [
+        ('{"room_id": "x", "depth"', ErrorKind.INVALID_JSON),
+        ({"room_id": "x"}, ErrorKind.SCHEMA_VIOLATION),
+        ("", ErrorKind.EMPTY_RESPONSE),
+        ({**valid_room_dict(make_request()), "depth": 99}, ErrorKind.SCHEMA_VIOLATION),
+    ],
+)
+def test_rejected_provider_output_keeps_usage_and_provider_metadata(payload, code):
+    result = ProviderResult(
+        payload=payload, usage=_usage(), provider_metadata={"finish_reason": "length"}
+    )
+
+    outcome = generate(make_service(RawResultProvider(result)))
+
+    assert_canonical_failure(outcome, code=code, status=502)
+    metadata = outcome.response.metadata
+    assert metadata.usage == _usage()
+    assert metadata.provider_metadata == {"finish_reason": "length"}
+
+
+def test_rejected_output_with_junk_telemetry_still_yields_a_canonical_failure():
+    result = ProviderResult(payload="{bad", usage="lots", provider_metadata=["nope"])  # type: ignore[arg-type]
+
+    outcome = generate(make_service(RawResultProvider(result)))
+
+    assert_canonical_failure(outcome, code=ErrorKind.INVALID_JSON, status=502)
+    assert outcome.response.metadata.usage is None
+    assert outcome.response.metadata.provider_metadata == {}
+
+
+def test_provider_reported_errors_still_carry_no_adapter_supplied_telemetry():
+    outcome = generate(
+        make_service(ClassifiedFailureProvider(ErrorKind.RATE_LIMITED, "secret text"))
+    )
+
+    assert_canonical_failure(outcome, code=ErrorKind.RATE_LIMITED, status=429)
+    assert outcome.response.metadata.usage is None
+    assert outcome.response.metadata.provider_metadata == {}
+
+
+# --- untrusted usage objects are canonicalized, not merely type-checked --------
+
+
+def _mutated_usage() -> UsageStats:
+    usage = UsageStats(input_tokens=10, output_tokens=5)
+    usage.output_tokens = -5  # no validate_assignment: mutation bypasses the bounds
+    return usage
+
+
+@pytest.mark.parametrize(
+    ("usage", "expected"),
+    [
+        (
+            UsageStats.model_construct(input_tokens=-1, output_tokens=5),
+            UsageStats(input_tokens=None, output_tokens=5),
+        ),
+        (_mutated_usage(), UsageStats(input_tokens=10, output_tokens=None)),
+        (
+            UsageStats.model_construct(input_tokens=99_999_999, output_tokens=2),
+            UsageStats(input_tokens=None, output_tokens=2),
+        ),
+        (
+            UsageStats.model_construct(input_tokens="12", output_tokens=True),  # type: ignore[arg-type]
+            UsageStats(),
+        ),
+        (
+            UsageStats.model_construct(input_tokens=1, estimated_cost_usd=float("inf")),
+            UsageStats(input_tokens=1),
+        ),
+        (
+            UsageStats.model_construct(input_tokens=1, estimated_cost_usd=float("nan")),
+            UsageStats(input_tokens=1),
+        ),
+        (
+            UsageStats.model_construct(estimated_cost_usd=-0.5),
+            UsageStats(),
+        ),
+        (UsageStats(input_tokens=3, output_tokens=4), UsageStats(input_tokens=3, output_tokens=4)),
+    ],
+    ids=[
+        "negative-input",
+        "mutated-negative-output",
+        "over-budget-input",
+        "wrong-types",
+        "infinite-cost",
+        "nan-cost",
+        "negative-cost",
+        "valid-unchanged",
+    ],
+)
+@pytest.mark.parametrize("rejected", [True, False], ids=["rejected-output", "successful-output"])
+def test_usage_is_canonicalized_field_by_field_before_it_reaches_the_response(
+    usage, expected, rejected
+):
+    payload = "{bad" if rejected else valid_room_dict(make_request())
+    result = ProviderResult(payload=payload, usage=usage)
+
+    outcome = generate(make_service(RawResultProvider(result)))
+
+    assert outcome.response.success is (not rejected)
+    assert outcome.response.metadata.usage == expected
+    # The envelope must stay serializable and re-validatable as a whole.
+    GenerationResponse.model_validate_json(outcome.response.model_dump_json())
+
+
+def test_canonicalization_never_mutates_the_providers_own_usage_object():
+    usage = UsageStats.model_construct(input_tokens=-1, output_tokens=5)
+
+    generate(make_service(RawResultProvider(ProviderResult(payload="{bad", usage=usage))))
+
+    assert usage.input_tokens == -1

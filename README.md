@@ -16,7 +16,7 @@ Early bootstrap. What exists today and what does not:
 | Component | Directory | State |
 |-----------|-----------|-------|
 | Godot 2D client (desktop + Android) | `game/` | Shell delivered by issue #4, developed alongside this one. Not part of the bootstrap files. |
-| Director service (FastAPI) | `director/` | Issue #5: `POST /v1/generate`, `GET /v1/config`, `GET /health`; provider registry; offline rules baseline as default. Issue #8 adds the `cloudflare-jev` adapter (see `director/docs/cloudflare-jev.md`; live calls need credentials). |
+| Director service (FastAPI) | `director/` | Issue #5: `POST /v1/generate`, `GET /v1/config`, `GET /health`; provider registry; offline rules baseline as default. Issue #8 adds the `cloudflare-jev` adapter (see `director/docs/cloudflare-jev.md`) and issue #9 the `groq` GPT-OSS adapter (see `director/docs/groq.md`); live calls need credentials. |
 | Shared plan contract (`RoomPlan`) | `director/dungeon_director/contracts.py` | Owned by issue #3. |
 | Benchmarks / replay | `benchmarks/` | Placeholder README only. |
 | Observability | `observability/` | Placeholder README only. |
@@ -44,12 +44,13 @@ Early bootstrap. What exists today and what does not:
 ```
 
 (The providers shown are the planned initial set from the epic; the rules
-baseline and the Cloudflare Jev adapter are implemented. Jev is TypeSafe's
+baseline, the Cloudflare Jev adapter and the Groq GPT-OSS adapter are implemented. Jev is TypeSafe's
 non-generative decision model, reached through Cloudflare's
 `/accounts/<id>/ai/run` REST endpoint: one call asks a fixed set of typed
 choice/score/yes-no questions about the dungeon state, and adapter code
-composes the calibrated answers into a `RoomPlan`. The others plug in through
-the same provider interface.)
+composes the calibrated answers into a `RoomPlan`. Groq is a generative
+comparison point: one strict-JSON-schema chat completion returns the whole
+`RoomPlan`. The others plug in through the same provider interface.)
 
 ### Provider-independent, semantic plans
 
@@ -254,6 +255,18 @@ decision rubric, error mapping and sanitized samples are documented in
 `director/tests/test_cloudflare_jev_live.py` and skip unless explicitly opted
 in with `RUN_LIVE_JEV=1` and credentials.
 
+The Groq provider (`groq` / `openai/gpt-oss-20b`, issue #9) asks GPT-OSS for a
+complete `RoomPlan` in one chat completion with `response_format` set to a
+strict JSON schema, minimal reasoning (`reasoning_effort: low`, reasoning text
+excluded), `temperature` 0 and a per-request seed, so runs are comparable with
+Jev. The model's JSON is validated only by the shared service: malformed or
+out-of-contract output is a recorded failure (with an excerpt, token usage and
+Groq timing metadata), never silently repaired. It is registered always but
+`available: false` until `GROQ_API_KEY` is set server-side. The verified API
+contract, prompt design, metadata fields and operator guide are in
+`director/docs/groq.md`; paid live tests in `director/tests/test_groq_live.py`
+run only with `RUN_LIVE_GROQ=1` **and** `GROQ_API_KEY`.
+
 Adding a provider means subclassing `DungeonDirectorProvider`
 (`director/dungeon_director/providers.py`) and registering it in
 `default_registry()`; nothing in the game changes.
@@ -328,8 +341,16 @@ load; its contents belong to the game shell.
   they never appear in `/v1/config`, responses, error messages, logs or test
   output. Missing or invalid optional Jev configuration leaves that provider
   `available: false`; choosing it as the default still stops startup.
-- The Groq/Cerebras keys and the OTLP endpoint in `.env.example` remain
-  placeholders for the remaining provider and telemetry issues.
+- The `groq` provider reads `GROQ_API_KEY`, `GROQ_MODEL` (default
+  `openai/gpt-oss-20b`), `GROQ_REASONING_EFFORT` (default `low`; GPT-OSS accepts
+  only `low`, `medium` or `high`), `GROQ_MAX_COMPLETION_TOKENS` (default `2048`)
+  and `GROQ_API_BASE_URL` (default `https://api.groq.com/openai/v1`; HTTPS
+  except loopback) from the process environment, with the same credential
+  hygiene as Jev. Missing or malformed optional Groq configuration leaves that
+  provider `available: false` and the rules baseline (and Jev) starting
+  normally; choosing it as the default still stops startup.
+- The Cerebras key and the OTLP endpoint in `.env.example` remain placeholders
+  for the remaining provider and telemetry issues.
 - Provider and model selection is configuration-driven: the game names a
   provider/model by stable id in the query string, never provider-specific logic.
 
@@ -341,11 +362,13 @@ director/       FastAPI director service
   dungeon_director/   Python package: app.py (HTTP + app factory), service.py
                       (timeout/validation/failure policy), providers.py,
                       registry.py, rules.py (baseline), cloudflare_jev.py
-                      (TypeSafe Jev via Cloudflare, issue #8), settings.py,
-                      contracts.py
-  docs/               Provider developer docs (cloudflare-jev.md)
+                      (TypeSafe Jev via Cloudflare, issue #8), groq.py
+                      (Groq GPT-OSS, issue #9), settings.py, contracts.py
+  docs/               Provider developer docs (cloudflare-jev.md, groq.md)
   tests/              Offline tests + fixtures (incl. sanitized Jev samples)
-                 and live tests (test_cloudflare_jev_live.py, credential-gated)
+                 and live tests (test_cloudflare_jev_live.py, test_groq_live.py,
+                 credential- and opt-in-gated; conftest.py blocks the network
+                 for every other test)
 benchmarks/     Replay/benchmark tooling (placeholder)
 observability/  OpenTelemetry/OpenLIT config (placeholder)
 Makefile        Local dev commands

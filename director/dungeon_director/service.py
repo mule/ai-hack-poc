@@ -26,6 +26,11 @@ so latency and reliability numbers stay comparable:
   been built with ``model_construct`` or mutated after validation). Every
   failure mode maps to a canonical failure envelope, so one
   bad provider can never take the service down;
+* a provider that answered with unusable output still spent tokens and time, so
+  the failure envelope keeps that result's ``provider_metadata`` and ``usage``.
+  Usage is rebuilt field by field in bounds (failure and success alike), since
+  an instance may come from ``model_construct`` or be mutated. Provider-*raised*
+  errors carry no telemetry: adapter text and state are untrusted;
 * unexpected-exception logs carry the provider, model and exception *type*
   only: exception text and tracebacks can echo credentials.
 """
@@ -35,6 +40,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import math
 import time
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -46,6 +52,7 @@ from dungeon_director.contracts import (
     GenerationRequest,
     GenerationResponse,
     RoomPlan,
+    UsageStats,
 )
 from dungeon_director.errors import (
     DirectorConfigError,
@@ -141,6 +148,7 @@ class DirectorService:
             raw_excerpt: str | None = None,
             provider_metadata: dict[str, JsonValue] | None = None,
             resolved_model: str | None = None,
+            usage: UsageStats | None = None,
         ) -> GenerationOutcome:
             response = GenerationResponse.failure(
                 request_id=request.request_id,
@@ -152,6 +160,7 @@ class DirectorService:
                 raw_excerpt=raw_excerpt,
                 started_at=started_at,
                 completed_at=datetime.now(UTC),
+                usage=usage,
                 provider_metadata=provider_metadata,
             )
             response.metadata.latency_ms = _elapsed_ms(started)
@@ -225,6 +234,15 @@ class DirectorService:
         if deadline.expired() or time.perf_counter() - call_started >= timeout_seconds:
             return deadline_missed()
 
+        # A provider that answered but produced unusable output still spent
+        # tokens and time: keep that telemetry on the failure so benchmarks can
+        # count it. The result is untrusted, so usage is rebuilt in bounds and
+        # metadata must at least be a dict (the envelope re-checks its budget).
+        usage = _canonical_usage(result.usage) if isinstance(result, ProviderResult) else None
+        telemetry: dict[str, UsageStats | dict[str, JsonValue] | None] = {"usage": usage}
+        if isinstance(result, ProviderResult) and isinstance(result.provider_metadata, dict):
+            telemetry["provider_metadata"] = result.provider_metadata
+
         try:
             if not isinstance(result, ProviderResult):
                 raise _InvalidOutput(
@@ -238,16 +256,29 @@ class DirectorService:
                 model=model,
                 started_at=started_at,
                 completed_at=datetime.now(UTC),
-                usage=result.usage,
+                usage=usage,
                 provider_metadata=result.provider_metadata,
             )
         except _InvalidOutput as exc:
             logger.warning("provider %s/%s output rejected: %s", provider_id, model, exc.code.value)
-            return fail(exc.code, exc.message, raw_excerpt=exc.raw_excerpt)
+            return fail(
+                exc.code,
+                exc.message,
+                raw_excerpt=exc.raw_excerpt,
+                **telemetry,
+            )
         except ValidationError as exc:
-            return fail(ErrorKind.SCHEMA_VIOLATION, _summarize(exc))
+            return fail(
+                ErrorKind.SCHEMA_VIOLATION,
+                _summarize(exc),
+                **telemetry,
+            )
         except ValueError as exc:  # e.g. room depth differs from the request depth
-            return fail(ErrorKind.SCHEMA_VIOLATION, str(exc))
+            return fail(
+                ErrorKind.SCHEMA_VIOLATION,
+                str(exc),
+                **telemetry,
+            )
         except Exception as exc:
             logger.error(
                 "provider %s/%s result could not be processed: %s",
@@ -255,7 +286,11 @@ class DirectorService:
                 model,
                 type(exc).__name__,
             )
-            return fail(ErrorKind.INTERNAL_ERROR, "Director failed to process the provider result.")
+            return fail(
+                ErrorKind.INTERNAL_ERROR,
+                "Director failed to process the provider result.",
+                **telemetry,
+            )
 
         response.metadata.latency_ms = _elapsed_ms(started)
         return GenerationOutcome(response, 200)
@@ -277,6 +312,37 @@ class _InvalidOutput(Exception):
 
 def _elapsed_ms(started: float) -> float:
     return round((time.perf_counter() - started) * 1000, 3)
+
+
+def _canonical_usage(usage: object) -> UsageStats | None:
+    """A fresh, in-bounds :class:`UsageStats` built from an untrusted one, or ``None``.
+
+    An ``isinstance`` check proves nothing about the bounds: instances can come
+    from ``model_construct`` or be mutated after validation, and Pydantic does
+    not revalidate instances when they are nested into the envelope. Each field
+    is therefore re-validated on its own (strictly, so ``True`` or ``"12"`` are
+    not coerced to tokens), invalid fields are dropped, and a non-finite cost is
+    dropped too because it cannot be serialized. The input is never mutated.
+    """
+    if not isinstance(usage, UsageStats):
+        return None
+    try:
+        raw = usage.model_dump(mode="python", warnings=False)
+    except Exception:  # hostile subclasses / half-built instances
+        return None
+    clean: dict[str, int | float] = {}
+    for name in ("input_tokens", "output_tokens", "estimated_cost_usd"):
+        value = raw.get(name)
+        if value is None:
+            continue
+        try:
+            checked = getattr(UsageStats.model_validate({name: value}, strict=True), name)
+        except (AttributeError, ValidationError):
+            continue
+        if isinstance(checked, float) and not math.isfinite(checked):
+            continue
+        clean[name] = checked
+    return UsageStats(**clean)
 
 
 def _coerce_room(payload: PlanPayload | None) -> RoomPlan:

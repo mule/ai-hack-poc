@@ -1282,7 +1282,7 @@ def test_default_registry_keeps_rules_default_and_flags_jev_unavailable(monkeypa
 
     described = {d.id: d for d in default_registry().describe()}
 
-    assert set(described) == {"rules-baseline", "cloudflare-jev"}
+    assert set(described) == {"rules-baseline", "cloudflare-jev", "groq"}
     assert described["rules-baseline"].available is True
     assert described["cloudflare-jev"].available is False
     assert described["cloudflare-jev"].default_model == "typesafe/jev"
