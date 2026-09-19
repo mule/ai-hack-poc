@@ -53,18 +53,29 @@ func record_entry(
 	seed_value: int,
 	result_payload: Dictionary = {},
 	fallback_reason: String = "",
-	custom_meta: Dictionary = {}
+	custom_meta: Dictionary = {},
+	response_metadata: Dictionary = {}
 ) -> void:
 	if _file == null:
 		return
+	var resolved_provider := provider
+	var resolved_model := model
+	if not response_metadata.is_empty():
+		var resp_provider := str(response_metadata.get("provider", "")).strip_edges()
+		if resp_provider != "":
+			resolved_provider = resp_provider
+		var resp_model := str(response_metadata.get("model", "")).strip_edges()
+		if resp_model != "":
+			resolved_model = resp_model
+
 	var entry := {
 		"contract_version": request.get("contract_version", "1.0.0"),
 		"run_id": request.get("run_id", ""),
 		"request_id": request.get("request_id", ""),
 		"timestamp": Time.get_datetime_string_from_system(true, false) + "Z",
 		"seed": seed_value,
-		"provider": provider,
-		"model": model,
+		"provider": resolved_provider,
+		"model": resolved_model,
 		"outcome": outcome,
 		"source": source,
 		"target_exit": request.get("target_exit", {}),
@@ -76,6 +87,8 @@ func record_entry(
 		entry["result"] = result_payload
 	if not custom_meta.is_empty():
 		entry["metadata"] = custom_meta
+	if not response_metadata.is_empty():
+		entry["response_metadata"] = response_metadata
 
 	var line := JSON.stringify(entry)
 	_file.store_line(line)

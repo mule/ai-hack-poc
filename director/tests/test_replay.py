@@ -54,7 +54,7 @@ from dungeon_director.groq import (
     GroqTransportResponse,
 )
 from dungeon_director.registry import ProviderRegistry
-from dungeon_director.rules import RulesProvider
+from dungeon_director.rules import RULES_MODEL, RulesProvider
 from dungeon_director.service import DirectorService
 from dungeon_director.settings import DirectorSettings
 
@@ -402,3 +402,78 @@ def test_cli_execution_with_output_files(tmp_path: Path):
     first_res = json.loads(lines[1])
     assert first_res.get("type") == "benchmark_result"
     assert first_res.get("request_id") == "req-run-fixture-001-1"
+
+
+class CloseTrackingProvider(RulesProvider):
+    def __init__(self, provider_id: str = "close-tracker") -> None:
+        self.provider_id = provider_id
+        self.models = (RULES_MODEL,)
+        self.default_model = RULES_MODEL
+        self.closed = False
+        self.close_calls = 0
+
+    async def aclose(self) -> None:
+        self.closed = True
+        self.close_calls += 1
+
+
+def test_run_benchmark_lifecycle_closes_registry_on_success_and_failure():
+    req = make_request()
+
+    # Success case: provider closes cleanly
+    tracker_success = CloseTrackingProvider("tracker-success")
+    reg_success = ProviderRegistry()
+    reg_success.register(tracker_success)
+    service_success = DirectorService(
+        reg_success,
+        DirectorSettings(default_provider="tracker-success", default_model="builtin-v1"),
+    )
+
+    report = asyncio.run(
+        run_benchmark(
+            [req],
+            providers=["tracker-success"],
+            models={"tracker-success": "builtin-v1"},
+            service=service_success,
+            registry=reg_success,
+        )
+    )
+    assert report.total_events_read == 1
+    assert tracker_success.closed is True
+    assert tracker_success.close_calls == 1
+
+    # Failure case: provider closes even if exception occurs during run
+    tracker_failure = CloseTrackingProvider("tracker-fail")
+    reg_failure = ProviderRegistry()
+    reg_failure.register(tracker_failure)
+    service_failure = DirectorService(
+        reg_failure,
+        DirectorSettings(default_provider="tracker-fail", default_model="builtin-v1"),
+    )
+
+    class CustomError(Exception):
+        pass
+
+    async def exploding_worker(*args: Any, **kwargs: Any) -> Any:
+        raise CustomError("benchmark exploded")
+
+    import benchmarks.replay as replay_module
+
+    orig_run_item = replay_module.run_replay_item
+    replay_module.run_replay_item = exploding_worker  # type: ignore[assignment]
+    try:
+        with pytest.raises(CustomError):
+            asyncio.run(
+                run_benchmark(
+                    [req],
+                    providers=["tracker-fail"],
+                    models={"tracker-fail": "builtin-v1"},
+                    service=service_failure,
+                    registry=reg_failure,
+                )
+            )
+    finally:
+        replay_module.run_replay_item = orig_run_item
+
+    assert tracker_failure.closed is True
+    assert tracker_failure.close_calls == 1

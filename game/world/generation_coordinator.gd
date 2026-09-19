@@ -242,11 +242,12 @@ func _on_result(result: Dictionary, request_id: String, world: RefCounted) -> vo
 ## the world, which refuses them because the frontier is no longer pending.
 func _resolve(f: Dictionary, request_id: String, result: Dictionary, late: bool, request: Dictionary = {}) -> void:
 	var interpreted := _interpret(result, request_id)
+	var resp_meta: Dictionary = interpreted.get("metadata", {})
 	if not interpreted.ok:
 		if late:
 			game_state.world.log_event("late_invalid", f.key, {"request_id": request_id, "reason": interpreted.reason})
 		else:
-			_fallback(f, request_id, interpreted.reason, request)
+			_fallback(f, request_id, interpreted.reason, request, resp_meta)
 		return
 	var plan: Dictionary = interpreted.plan
 	var placed: Dictionary
@@ -257,15 +258,15 @@ func _resolve(f: Dictionary, request_id: String, result: Dictionary, late: bool,
 	if placed.ok:
 		if recorder != null and not request.is_empty():
 			var room_seed := int(placed.get("room", {}).get("seed_used", game_state.world_seed))
-			recorder.record_entry(request, provider, model, "committed", "director", room_seed, plan, "", placed.get("room", {}).get("meta", {}))
+			recorder.record_entry(request, provider, model, "committed", "director", room_seed, plan, "", placed.get("room", {}).get("meta", {}), resp_meta)
 		return
 	if late or placed.outcome != "rejected":
 		return
-	_fallback(f, request_id, "plan_rejected:%s" % placed.reason, request)
+	_fallback(f, request_id, "plan_rejected:%s" % placed.reason, request, resp_meta)
 
 
 
-## Transport result -> {ok, plan} or {ok:false, reason}.
+## Transport result -> {ok, plan, metadata} or {ok:false, reason, [metadata]}.
 func _interpret(result: Dictionary, request_id: String) -> Dictionary:
 	if not result.get("transport_ok", false):
 		return {"ok": false, "reason": str(result.get("error_kind", "transport_failure"))}
@@ -284,9 +285,11 @@ func _interpret(result: Dictionary, request_id: String) -> Dictionary:
 	var response: Dictionary = parsed.response
 	if response.request_id != request_id or response.run_id != game_state.world.run_id:
 		return {"ok": false, "reason": "response_mismatch"}
+	var meta: Dictionary = response.get("metadata", {})
 	if response.get("success", true) == false:
-		return {"ok": false, "reason": "provider_failure:%s" % response.metadata.error.code}
-	return {"ok": true, "plan": response.room}
+		var code: String = meta.get("error", {}).get("code", "unknown_error")
+		return {"ok": false, "reason": "provider_failure:%s" % code, "metadata": meta}
+	return {"ok": true, "plan": response.room, "metadata": meta}
 
 
 # --- placement and fallback --------------------------------------------------
@@ -335,7 +338,7 @@ func _place_plan(f: Dictionary, request_id: String, plan: Dictionary, source: St
 
 
 ## Deterministic local plan -> commit; last resort seals the exit.
-func _fallback(f: Dictionary, request_id: String, reason: String, request: Dictionary = {}) -> void:
+func _fallback(f: Dictionary, request_id: String, reason: String, request: Dictionary = {}, response_metadata: Dictionary = {}) -> void:
 	var world: DungeonWorld = game_state.world
 	if f.is_empty() or f.status != DungeonWorld.STATUS_PENDING or f.request_id != request_id:
 		return
@@ -349,11 +352,11 @@ func _fallback(f: Dictionary, request_id: String, reason: String, request: Dicti
 		if placed.ok or placed.outcome != "rejected":
 			if placed.ok and recorder != null and not req.is_empty():
 				var room_seed := int(placed.get("room", {}).get("seed_used", game_state.world_seed))
-				recorder.record_entry(req, provider, model, "fallback", "fallback", room_seed, plan, reason, placed.get("room", {}).get("meta", {}))
+				recorder.record_entry(req, provider, model, "fallback", "fallback", room_seed, plan, reason, placed.get("room", {}).get("meta", {}), response_metadata)
 			return
 	world.seal_frontier(f.key, request_id, "no_placement_fits")
 	if recorder != null and not req.is_empty():
-		recorder.record_entry(req, provider, model, "sealed", "sealed", game_state.world_seed, {}, "no_placement_fits", {})
+		recorder.record_entry(req, provider, model, "sealed", "sealed", game_state.world_seed, {}, "no_placement_fits", {}, response_metadata)
 	game_state.log_message("The passage collapses; that exit is sealed.")
 
 

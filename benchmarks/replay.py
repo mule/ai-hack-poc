@@ -413,58 +413,65 @@ async def run_benchmark(
     models: dict[str, str] | None = None,
     *,
     service: DirectorService | None = None,
+    registry: ProviderRegistry | None = None,
     iterations: int = 1,
     concurrency: int = 1,
     input_name: str = "dataset.jsonl",
 ) -> BenchmarkReport:
     """Run replay benchmark for the given requests across selected providers."""
+    owned_registry: ProviderRegistry | None = None
     if service is None:
-        service, _ = build_default_service()
+        service, owned_registry = build_default_service()
+    reg = registry or owned_registry
 
-    model_map = dict(DEFAULT_MODELS)
-    if models:
-        model_map.update(models)
+    try:
+        model_map = dict(DEFAULT_MODELS)
+        if models:
+            model_map.update(models)
 
-    semaphore = asyncio.Semaphore(concurrency if concurrency > 0 else 1)
+        semaphore = asyncio.Semaphore(concurrency if concurrency > 0 else 1)
 
-    async def worker(req: GenerationRequest, prov: str, mod: str, it: int) -> ReplayItemResult:
-        async with semaphore:
-            return await run_replay_item(service, req, prov, mod, it)
+        async def worker(req: GenerationRequest, prov: str, mod: str, it: int) -> ReplayItemResult:
+            async with semaphore:
+                return await run_replay_item(service, req, prov, mod, it)
 
-    tasks: list[asyncio.Task[ReplayItemResult]] = []
-    for prov in providers:
-        mod = model_map.get(prov, DEFAULT_MODELS.get(prov, "default"))
-        for it in range(1, iterations + 1):
-            for req in requests:
-                tasks.append(asyncio.create_task(worker(req, prov, mod, it)))
+        tasks: list[asyncio.Task[ReplayItemResult]] = []
+        for prov in providers:
+            mod = model_map.get(prov, DEFAULT_MODELS.get(prov, "default"))
+            for it in range(1, iterations + 1):
+                for req in requests:
+                    tasks.append(asyncio.create_task(worker(req, prov, mod, it)))
 
-    all_results: list[ReplayItemResult] = await asyncio.gather(*tasks)
+        all_results: list[ReplayItemResult] = await asyncio.gather(*tasks)
 
-    # Group by provider/model
-    grouped: dict[tuple[str, str], list[ReplayItemResult]] = defaultdict(list)
-    for res in all_results:
-        grouped[(res.provider, res.model)].append(res)
+        # Group by provider/model
+        grouped: dict[tuple[str, str], list[ReplayItemResult]] = defaultdict(list)
+        for res in all_results:
+            grouped[(res.provider, res.model)].append(res)
 
-    summaries: list[ProviderSummary] = []
-    summary_by_provider: dict[str, dict[str, Any]] = {}
-    for (prov, mod), items in grouped.items():
-        summary = compute_provider_summary(prov, mod, items)
-        summaries.append(summary)
-        summary_by_provider[prov] = summary.to_dict()
+        summaries: list[ProviderSummary] = []
+        summary_by_provider: dict[str, dict[str, Any]] = {}
+        for (prov, mod), items in grouped.items():
+            summary = compute_provider_summary(prov, mod, items)
+            summaries.append(summary)
+            summary_by_provider[prov] = summary.to_dict()
 
-    now_iso = datetime.now(UTC).isoformat().replace("+00:00", "Z")
-    return BenchmarkReport(
-        generated_at=now_iso,
-        contract_version=CONTRACT_VERSION,
-        input_file=input_name,
-        total_events_read=len(requests),
-        unique_requests=len({r.request_id for r in requests}),
-        iterations=iterations,
-        concurrency=concurrency,
-        providers=summaries,
-        summary_by_provider=summary_by_provider,
-        results=all_results,
-    )
+        now_iso = datetime.now(UTC).isoformat().replace("+00:00", "Z")
+        return BenchmarkReport(
+            generated_at=now_iso,
+            contract_version=CONTRACT_VERSION,
+            input_file=input_name,
+            total_events_read=len(requests),
+            unique_requests=len({r.request_id for r in requests}),
+            iterations=iterations,
+            concurrency=concurrency,
+            providers=summaries,
+            summary_by_provider=summary_by_provider,
+            results=all_results,
+        )
+    finally:
+        if reg is not None:
+            await reg.aclose()
 
 
 def print_human_summary(report: BenchmarkReport) -> None:
@@ -577,13 +584,14 @@ async def main_async(args: argparse.Namespace) -> int:
         return 0
 
     model_overrides = parse_model_overrides(args.models)
-    service, _ = build_default_service(timeout_seconds=args.timeout)
+    service, registry = build_default_service(timeout_seconds=args.timeout)
 
     report = await run_benchmark(
         requests=requests,
         providers=args.providers,
         models=model_overrides,
         service=service,
+        registry=registry,
         iterations=args.iterations,
         concurrency=args.concurrency,
         input_name=str(args.input),

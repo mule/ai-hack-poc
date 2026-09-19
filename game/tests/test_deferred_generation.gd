@@ -66,6 +66,8 @@ func _run() -> void:
 	await _step("test_http_client", _test_http_client)
 	await _step("test_coordinator_over_real_http", _test_coordinator_over_real_http)
 	await _step("test_generation_recording", _test_generation_recording)
+	await _step("test_recorder_preserves_resolved_provider_and_metadata", _test_recorder_preserves_resolved_provider_and_metadata)
+	await _step("test_recorder_captures_failure_envelope_and_fallback_without_secrets", _test_recorder_captures_failure_envelope_and_fallback_without_secrets)
 	_completed = true
 	_finish()
 
@@ -789,3 +791,122 @@ func _test_generation_recording() -> void:
 	DirAccess.remove_absolute(ProjectSettings.globalize_path(log_path))
 	_end()
 
+
+func _test_recorder_preserves_resolved_provider_and_metadata() -> void:
+	print("\nTest: Recorder preserves resolved provider/model and response metadata on default-provider success")
+	var log_path := "user://test_recordings/resolved_meta.jsonl"
+	if FileAccess.file_exists(log_path):
+		DirAccess.remove_absolute(ProjectSettings.globalize_path(log_path))
+	var rec := GenerationRecorder.new(log_path)
+	var env := _env()
+	env.coord.recorder = rec
+	# Coordinator has blank provider/model (director defaults configured)
+	_check_eq(env.coord.provider, "", "coordinator provider is blank default")
+	_check_eq(env.coord.model, "", "coordinator model is blank default")
+
+	var request := _request_north(env)
+	var plan := StubDirector.simple_plan(request, "r-meta-1", "small", ["east"])
+	var body_dict: Dictionary = {
+		"contract_version": "1.0.0",
+		"request_id": request.request_id,
+		"run_id": request.run_id,
+		"success": true,
+		"room": plan,
+		"metadata": {
+			"provider": "rules-baseline",
+			"model": "builtin-v1",
+			"started_at": "2026-09-19T10:00:00.000Z",
+			"completed_at": "2026-09-19T10:00:00.012Z",
+			"latency_ms": 12.34,
+			"usage": {"input_tokens": 120, "output_tokens": 80, "estimated_cost_usd": 0.0002},
+			"provider_metadata": {"adapter": "rules_direct"},
+		},
+	}
+	env.transport.deliver(0, StubDirector.ok_result(JSON.stringify(body_dict), 200))
+	env.coord.update()
+	_check_eq(env.state.world.get_frontier(NORTH).status, DungeonWorld.STATUS_COMMITTED, "north committed")
+	rec.close()
+
+	var file := FileAccess.open(log_path, FileAccess.READ)
+	_check(file != null, "opened resolved metadata log")
+	var line := file.get_line()
+	var entry: Variant = JSON.parse_string(line)
+	_check(entry is Dictionary, "recorded entry is JSON")
+	if entry is Dictionary:
+		_check_eq(entry.get("provider", ""), "rules-baseline", "entry resolved provider from response metadata")
+		_check_eq(entry.get("model", ""), "builtin-v1", "entry resolved model from response metadata")
+		_check_eq(entry.get("outcome", ""), "committed", "entry outcome is committed")
+		var resp_meta: Dictionary = entry.get("response_metadata", {})
+		_check_eq(resp_meta.get("provider", ""), "rules-baseline", "response_metadata provider matches")
+		_check_eq(resp_meta.get("model", ""), "builtin-v1", "response_metadata model matches")
+		_check_eq(float(resp_meta.get("latency_ms", 0.0)), 12.34, "response_metadata latency_ms matches")
+		var usage: Dictionary = resp_meta.get("usage", {})
+		_check_eq(int(usage.get("input_tokens", 0)), 120, "usage input_tokens matches")
+		_check_eq(int(usage.get("output_tokens", 0)), 80, "usage output_tokens matches")
+		_check_eq(resp_meta.get("provider_metadata", {}).get("adapter", ""), "rules_direct", "provider_metadata matches")
+		# Verify placement metadata is also preserved
+		var meta: Dictionary = entry.get("metadata", {})
+		_check_eq(meta.get("room_type", ""), "room", "placement metadata room_type preserved")
+		_check_eq(meta.get("size_used", ""), "small", "placement metadata size_used preserved")
+	file.close()
+	DirAccess.remove_absolute(ProjectSettings.globalize_path(log_path))
+	_end()
+
+
+func _test_recorder_captures_failure_envelope_and_fallback_without_secrets() -> void:
+	print("\nTest: Recorder captures failure envelope and fallback without secrets")
+	var log_path := "user://test_recordings/failure_meta.jsonl"
+	if FileAccess.file_exists(log_path):
+		DirAccess.remove_absolute(ProjectSettings.globalize_path(log_path))
+	var rec := GenerationRecorder.new(log_path)
+	var env := _env()
+	env.coord.recorder = rec
+	var request := _request_north(env)
+	var failure_body_dict: Dictionary = {
+		"contract_version": "1.0.0",
+		"request_id": request.request_id,
+		"run_id": request.run_id,
+		"success": false,
+		"room": null,
+		"metadata": {
+			"provider": "groq",
+			"model": "openai/gpt-oss-120b",
+			"started_at": "2026-09-19T10:00:00.000Z",
+			"completed_at": "2026-09-19T10:00:00.045Z",
+			"latency_ms": 45.0,
+			"error": {
+				"code": "schema_violation",
+				"message": "Provider output did not match the room contract.",
+			},
+		},
+	}
+	# Transport delivers HTTP 502 with canonical failure envelope
+	env.transport.deliver(0, StubDirector.ok_result(JSON.stringify(failure_body_dict), 502))
+	env.coord.update()
+
+	# World should fall back and commit local rules baseline
+	_check_eq(env.state.world.get_frontier(NORTH).status, DungeonWorld.STATUS_COMMITTED, "north committed via fallback")
+	_check_eq(_last_fallback_reason(env.state), "provider_failure:schema_violation", "fallback reason recorded on world")
+	rec.close()
+
+	var file := FileAccess.open(log_path, FileAccess.READ)
+	_check(file != null, "opened failure metadata log")
+	var line := file.get_line()
+	var entry: Variant = JSON.parse_string(line)
+	_check(entry is Dictionary, "recorded fallback entry is JSON")
+	if entry is Dictionary:
+		_check_eq(entry.get("outcome", ""), "fallback", "outcome is fallback")
+		_check_eq(entry.get("provider", ""), "groq", "resolved failing provider groq")
+		_check_eq(entry.get("model", ""), "openai/gpt-oss-120b", "resolved failing model")
+		_check_eq(entry.get("fallback_reason", ""), "provider_failure:schema_violation", "fallback reason recorded")
+		var resp_meta: Dictionary = entry.get("response_metadata", {})
+		_check_eq(float(resp_meta.get("latency_ms", 0.0)), 45.0, "failure latency preserved")
+		var err: Dictionary = resp_meta.get("error", {})
+		_check_eq(err.get("code", ""), "schema_violation", "error code matches")
+		_check_eq(err.get("message", ""), "Provider output did not match the room contract.", "error message matches")
+		# Confirm no secrets leaked: raw string check
+		_check(not line.contains("sk-"), "no api keys leaked in JSON line")
+		_check(not line.contains("Bearer"), "no auth tokens leaked in JSON line")
+	file.close()
+	DirAccess.remove_absolute(ProjectSettings.globalize_path(log_path))
+	_end()
