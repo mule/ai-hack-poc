@@ -210,9 +210,11 @@ figure built from 5 of 10 requests says so. A provider that reports a genuine
   columns always include every contract value, plus any extra value seen, so
   files from different runs line up.
 
-Sample inputs: `benchmarks/fixtures/sample_replay_results.json` and
-`.jsonl` (the same 50 results in both shapes: five provider/model groups, two
-Groq models, timeouts, a schema failure, and partial or missing usage).
+Synthetic sample inputs: `benchmarks/fixtures/sample_replay_results.json` and
+`.jsonl` contain illustrative values for tests and demos, not measurements from
+the named providers. They hold the same 50 results in both shapes: five
+provider/model groups, two Groq models, timeouts, a schema failure, and partial
+or missing usage.
 
 ---
 
