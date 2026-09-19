@@ -18,7 +18,8 @@ Early bootstrap. What exists today and what does not:
 | Godot 2D client (desktop + Android) | `game/` | Shell delivered by issue #4, developed alongside this one. Not part of the bootstrap files. |
 | Director service (FastAPI) | `director/` | Issue #5: `POST /v1/generate`, `GET /v1/config`, `GET /health`; provider registry; offline rules baseline as default. Issues #8-#10 add Cloudflare Jev, Groq GPT-OSS, and Cerebras Qwen adapters under `director/docs/`; live calls need credentials. |
 | Shared plan contract (`RoomPlan`) | `director/dungeon_director/contracts.py` | Owned by issue #3. |
-| Benchmarks / replay | `benchmarks/` | Placeholder README only. |
+| Simulation harness | `game/simulation/`, `benchmarks/simulation/` | Issue #16: `make simulate` grows dungeons headlessly with the real generation code and writes JSON/JSONL datasets (offline rules baseline by default; explicit, budget-capped `--remote` opt-in). See [benchmarks/simulation/README.md](benchmarks/simulation/README.md). |
+| Benchmarks / replay | `benchmarks/` | Replay and reporting are placeholders; only the simulation harness exists. |
 | Observability | `observability/` | Placeholder README only. |
 | Docker Compose | n/a | None yet. Added only if it helps local observability/service startup; the Godot client is never containerized. |
 
@@ -309,7 +310,8 @@ a director with `DUNGEON_DIRECTOR_URL` (default `http://127.0.0.1:8000`, or
 | `make format` | `ruff check --fix` + `ruff format` |
 | `make check` | `lint` + `test` (Python only, no Godot needed) |
 | `make godot-check` | Headless-load the Godot project for 10 frames; log at `/tmp/godot-load.log`. Fails with a message if `game/project.godot` is absent |
-| `make godot-test` | Headless Godot tests: `game/tests/test_mechanics.gd` (required), then the contract, room-generator, deferred-generation (`test_deferred_world.gd`, `test_deferred_generation.gd`, `test_deferred_simulation.gd`) and scene-smoke suites if they exist. Requires `game/project.godot`. Fails on `SCRIPT ERROR:`/`Parse Error:`/`Failed to load script` in a log, or a missing success sentinel. Logs: `/tmp/godot-*.log` |
+| `make godot-test` | Headless Godot tests: `game/tests/test_mechanics.gd` (required), then the contract, room-generator, deferred-generation (`test_deferred_world.gd`, `test_deferred_generation.gd`, `test_deferred_simulation.gd`), simulation-harness (`test_simulation_harness.gd`) and scene-smoke suites if they exist. Requires `game/project.godot`. Fails on `SCRIPT ERROR:`/`Parse Error:`/`Failed to load script` in a log, or a missing success sentinel. Logs: `/tmp/godot-*.log` |
+| `make simulate` | Headless dungeon simulation (issue #16): 5 runs x 100 steps on the offline rules baseline, dataset written to git-ignored `simulation-output/<UTC stamp>/`. Pass flags with `SIM_ARGS='...'`; real provider calls need an explicit `--remote` and may cost money. Exits 1 on detected invariant failures. See [benchmarks/simulation/README.md](benchmarks/simulation/README.md) |
 | `make godot-lint` | `gdlint game` (install with `pip install gdtoolkit`) |
 | `make clean` | Remove the virtualenv, Python caches and `director/build`, `director/dist` |
 
@@ -369,7 +371,7 @@ load; its contents belong to the game shell.
 ## Repository layout
 
 ```
-game/           Godot 2D client (issue #4)
+game/           Godot 2D client (issue #4); simulation/ is the headless harness (#16)
 director/       FastAPI director service
   dungeon_director/   Python package: app.py (HTTP + app factory), service.py
                       (timeout/validation/failure policy), providers.py,
@@ -382,7 +384,8 @@ director/       FastAPI director service
                  and live tests (Jev, Groq, and Cerebras,
                  credential- and opt-in-gated; conftest.py blocks the network
                  for every other test)
-benchmarks/     Replay/benchmark tooling (placeholder)
+benchmarks/     Replay/benchmark tooling (placeholder); simulation/ holds the
+                simulation dataset docs, JSON Schemas and a sanitized fixture
 observability/  OpenTelemetry/OpenLIT config (placeholder)
 Makefile        Local dev commands
 .env.example    Configuration template (no secrets)

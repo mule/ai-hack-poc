@@ -29,6 +29,10 @@ builds/
 *.keystore
 *.jks
 
+# Generated simulation datasets (make simulate). Sanitized fixtures live in
+# benchmarks/simulation/fixtures/ and stay tracked.
+simulation-output/
+
 # Editors / OS
 .vscode/
 .idea/

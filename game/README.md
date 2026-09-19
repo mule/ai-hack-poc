@@ -70,6 +70,18 @@ godot --headless --path game -s res://tests/test_deferred_simulation.gd   # 100+
 
 No live server is needed: transports are injected fakes plus a loopback mini HTTP server (`tests/support/`).
 
+### Running the Simulation Harness (issue #16)
+
+```bash
+make simulate                                    # from the repo root: 5 runs x 100 steps, offline
+godot --headless --path game -s res://tests/test_simulation_harness.gd   # its test suite
+```
+
+`game/simulation/` drives the real `GameState`, `DungeonWorld`, `GenerationCoordinator`
+and `RoomGenerator` with no player and audits topology, reachability, overlap, placement
+conflicts and stalls. It is offline by default; real provider calls need an explicit
+`--remote`. Flags, dataset format and limitations: [benchmarks/simulation/README.md](../benchmarks/simulation/README.md).
+
 ### Running Headless Contract Tests
 
 Run the contract fixture validation test suite:

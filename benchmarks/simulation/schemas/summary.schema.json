@@ -1,0 +1,870 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/mule/ai-hack-poc/benchmarks/simulation/schemas/summary.schema.json",
+  "title": "Simulation summary",
+  "description": "summary.json: per-run and overall metrics and the verdict.",
+  "x-dataset-schema-version": "1.0.0",
+  "type": "object",
+  "properties": {
+    "overall": {
+      "type": "object",
+      "properties": {
+        "passed": {
+          "type": "boolean"
+        },
+        "truncated": {
+          "anyOf": [
+            {
+              "enum": [
+                "request_budget_exhausted"
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "runs": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "steps": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "rooms_committed": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "rooms_explored": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "sealed_exits": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "sources": {
+          "type": "object",
+          "properties": {
+            "start": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "director": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "fallback": {
+              "type": "integer",
+              "minimum": 0
+            }
+          },
+          "required": [
+            "director",
+            "fallback",
+            "start"
+          ],
+          "additionalProperties": false
+        },
+        "fallback_frequency": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        },
+        "fallback_reasons": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "description": "fallback reason category -> count"
+        },
+        "danger": {
+          "type": "object",
+          "properties": {
+            "min": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "max": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "mean": {
+              "type": "number"
+            },
+            "mean_slope": {
+              "type": "number"
+            },
+            "histogram": {
+              "type": "object",
+              "additionalProperties": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "description": "value -> count"
+            }
+          },
+          "required": [
+            "histogram",
+            "max",
+            "mean",
+            "mean_slope",
+            "min"
+          ],
+          "additionalProperties": false
+        },
+        "resources": {
+          "type": "object",
+          "properties": {
+            "enemies": {
+              "type": "object",
+              "properties": {
+                "total": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "by_type": {
+                  "type": "object",
+                  "additionalProperties": {
+                    "type": "integer",
+                    "minimum": 0
+                  },
+                  "description": "type -> total"
+                }
+              },
+              "required": [
+                "by_type",
+                "total"
+              ],
+              "additionalProperties": false
+            },
+            "items": {
+              "type": "object",
+              "properties": {
+                "total": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "by_type": {
+                  "type": "object",
+                  "additionalProperties": {
+                    "type": "integer",
+                    "minimum": 0
+                  },
+                  "description": "type -> total"
+                }
+              },
+              "required": [
+                "by_type",
+                "total"
+              ],
+              "additionalProperties": false
+            },
+            "per_room": {
+              "type": "object",
+              "properties": {
+                "enemies": {
+                  "type": "object",
+                  "properties": {
+                    "mean": {
+                      "type": "number"
+                    },
+                    "stdev": {
+                      "type": "number"
+                    },
+                    "min": {
+                      "type": "integer",
+                      "minimum": 0
+                    },
+                    "max": {
+                      "type": "integer",
+                      "minimum": 0
+                    }
+                  },
+                  "required": [
+                    "max",
+                    "mean",
+                    "min",
+                    "stdev"
+                  ],
+                  "additionalProperties": false
+                },
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "mean": {
+                      "type": "number"
+                    },
+                    "stdev": {
+                      "type": "number"
+                    },
+                    "min": {
+                      "type": "integer",
+                      "minimum": 0
+                    },
+                    "max": {
+                      "type": "integer",
+                      "minimum": 0
+                    }
+                  },
+                  "required": [
+                    "max",
+                    "mean",
+                    "min",
+                    "stdev"
+                  ],
+                  "additionalProperties": false
+                }
+              },
+              "required": [
+                "enemies",
+                "items"
+              ],
+              "additionalProperties": false
+            },
+            "enemies_per_room_histogram": {
+              "type": "object",
+              "additionalProperties": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "description": "value -> count"
+            },
+            "items_per_room_histogram": {
+              "type": "object",
+              "additionalProperties": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "description": "value -> count"
+            },
+            "rooms_without_enemies": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "rooms_without_items": {
+              "type": "integer",
+              "minimum": 0
+            }
+          },
+          "required": [
+            "enemies",
+            "enemies_per_room_histogram",
+            "items",
+            "items_per_room_histogram",
+            "per_room",
+            "rooms_without_enemies",
+            "rooms_without_items"
+          ],
+          "additionalProperties": false
+        },
+        "repetition": {
+          "type": "object",
+          "properties": {
+            "mean_signature_repeat_rate": {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 1
+            },
+            "max_consecutive_same_type": {
+              "type": "integer",
+              "minimum": 0
+            }
+          },
+          "required": [
+            "max_consecutive_same_type",
+            "mean_signature_repeat_rate"
+          ],
+          "additionalProperties": false
+        },
+        "failures": {
+          "type": "object",
+          "properties": {
+            "error": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "warning": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "info": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "by_kind": {
+              "type": "object",
+              "additionalProperties": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "description": "failure kind -> count"
+            }
+          },
+          "required": [
+            "by_kind",
+            "error",
+            "info",
+            "warning"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "required": [
+        "danger",
+        "failures",
+        "fallback_frequency",
+        "fallback_reasons",
+        "passed",
+        "repetition",
+        "resources",
+        "rooms_committed",
+        "rooms_explored",
+        "runs",
+        "sealed_exits",
+        "sources",
+        "steps",
+        "truncated"
+      ],
+      "additionalProperties": false
+    },
+    "runs": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "run": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "seed": {
+            "type": "integer"
+          },
+          "run_id": {
+            "type": "string"
+          },
+          "status": {
+            "enum": [
+              "completed",
+              "stalled",
+              "aborted",
+              "budget_exhausted"
+            ]
+          },
+          "passed": {
+            "type": "boolean"
+          },
+          "steps": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "rooms_committed": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "rooms_explored": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "sealed_exits": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "breaches": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "open_frontiers_end": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "pending_end": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "sources": {
+            "type": "object",
+            "properties": {
+              "start": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "director": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "fallback": {
+                "type": "integer",
+                "minimum": 0
+              }
+            },
+            "required": [
+              "director",
+              "fallback",
+              "start"
+            ],
+            "additionalProperties": false
+          },
+          "fallback_frequency": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 1
+          },
+          "fallback_reasons": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "description": "fallback reason category -> count"
+          },
+          "danger": {
+            "type": "object",
+            "properties": {
+              "min": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "max": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "mean": {
+                "type": "number"
+              },
+              "slope": {
+                "type": "number"
+              },
+              "first_third_mean": {
+                "type": "number"
+              },
+              "last_third_mean": {
+                "type": "number"
+              },
+              "histogram": {
+                "type": "object",
+                "additionalProperties": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "description": "value -> count"
+              },
+              "by_bucket": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "from": {
+                      "type": "integer",
+                      "minimum": 0
+                    },
+                    "to": {
+                      "type": "integer",
+                      "minimum": 0
+                    },
+                    "rooms": {
+                      "type": "integer",
+                      "minimum": 0
+                    },
+                    "mean": {
+                      "type": "number"
+                    }
+                  },
+                  "required": [
+                    "from",
+                    "mean",
+                    "rooms",
+                    "to"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            },
+            "required": [
+              "by_bucket",
+              "first_third_mean",
+              "histogram",
+              "last_third_mean",
+              "max",
+              "mean",
+              "min",
+              "slope"
+            ],
+            "additionalProperties": false
+          },
+          "resources": {
+            "type": "object",
+            "properties": {
+              "enemies": {
+                "type": "object",
+                "properties": {
+                  "total": {
+                    "type": "integer",
+                    "minimum": 0
+                  },
+                  "by_type": {
+                    "type": "object",
+                    "additionalProperties": {
+                      "type": "integer",
+                      "minimum": 0
+                    },
+                    "description": "type -> total"
+                  }
+                },
+                "required": [
+                  "by_type",
+                  "total"
+                ],
+                "additionalProperties": false
+              },
+              "items": {
+                "type": "object",
+                "properties": {
+                  "total": {
+                    "type": "integer",
+                    "minimum": 0
+                  },
+                  "by_type": {
+                    "type": "object",
+                    "additionalProperties": {
+                      "type": "integer",
+                      "minimum": 0
+                    },
+                    "description": "type -> total"
+                  }
+                },
+                "required": [
+                  "by_type",
+                  "total"
+                ],
+                "additionalProperties": false
+              },
+              "per_room": {
+                "type": "object",
+                "properties": {
+                  "enemies": {
+                    "type": "object",
+                    "properties": {
+                      "mean": {
+                        "type": "number"
+                      },
+                      "stdev": {
+                        "type": "number"
+                      },
+                      "min": {
+                        "type": "integer",
+                        "minimum": 0
+                      },
+                      "max": {
+                        "type": "integer",
+                        "minimum": 0
+                      }
+                    },
+                    "required": [
+                      "max",
+                      "mean",
+                      "min",
+                      "stdev"
+                    ],
+                    "additionalProperties": false
+                  },
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "mean": {
+                        "type": "number"
+                      },
+                      "stdev": {
+                        "type": "number"
+                      },
+                      "min": {
+                        "type": "integer",
+                        "minimum": 0
+                      },
+                      "max": {
+                        "type": "integer",
+                        "minimum": 0
+                      }
+                    },
+                    "required": [
+                      "max",
+                      "mean",
+                      "min",
+                      "stdev"
+                    ],
+                    "additionalProperties": false
+                  }
+                },
+                "required": [
+                  "enemies",
+                  "items"
+                ],
+                "additionalProperties": false
+              },
+              "enemies_per_room_histogram": {
+                "type": "object",
+                "additionalProperties": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "description": "value -> count"
+              },
+              "items_per_room_histogram": {
+                "type": "object",
+                "additionalProperties": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "description": "value -> count"
+              },
+              "rooms_without_enemies": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "rooms_without_items": {
+                "type": "integer",
+                "minimum": 0
+              }
+            },
+            "required": [
+              "enemies",
+              "enemies_per_room_histogram",
+              "items",
+              "items_per_room_histogram",
+              "per_room",
+              "rooms_without_enemies",
+              "rooms_without_items"
+            ],
+            "additionalProperties": false
+          },
+          "repetition": {
+            "type": "object",
+            "properties": {
+              "unique_signatures": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "signature_repeat_rate": {
+                "type": "number",
+                "minimum": 0,
+                "maximum": 1
+              },
+              "consecutive_signature_repeat_rate": {
+                "type": "number",
+                "minimum": 0,
+                "maximum": 1
+              },
+              "max_consecutive_same_type": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "type_histogram": {
+                "type": "object",
+                "additionalProperties": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "description": "value -> count"
+              },
+              "size_histogram": {
+                "type": "object",
+                "additionalProperties": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "description": "value -> count"
+              }
+            },
+            "required": [
+              "consecutive_signature_repeat_rate",
+              "max_consecutive_same_type",
+              "signature_repeat_rate",
+              "size_histogram",
+              "type_histogram",
+              "unique_signatures"
+            ],
+            "additionalProperties": false
+          },
+          "failures": {
+            "type": "object",
+            "properties": {
+              "error": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "warning": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "info": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "by_kind": {
+                "type": "object",
+                "additionalProperties": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "description": "failure kind -> count"
+              }
+            },
+            "required": [
+              "by_kind",
+              "error",
+              "info",
+              "warning"
+            ],
+            "additionalProperties": false
+          },
+          "counters": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "description": "DungeonWorld counters at run end"
+          }
+        },
+        "required": [
+          "breaches",
+          "counters",
+          "danger",
+          "failures",
+          "fallback_frequency",
+          "fallback_reasons",
+          "open_frontiers_end",
+          "passed",
+          "pending_end",
+          "repetition",
+          "resources",
+          "rooms_committed",
+          "rooms_explored",
+          "run",
+          "run_id",
+          "sealed_exits",
+          "seed",
+          "sources",
+          "status",
+          "steps"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "telemetry": {
+      "type": "object",
+      "properties": {
+        "requests_submitted": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "requests_refused": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "latency_ms": {
+          "anyOf": [
+            {
+              "type": "object",
+              "properties": {
+                "count": {
+                  "type": "integer",
+                  "minimum": 1
+                },
+                "mean": {
+                  "type": "number"
+                },
+                "p50": {
+                  "type": "number"
+                },
+                "p90": {
+                  "type": "number"
+                },
+                "p99": {
+                  "type": "number"
+                },
+                "max": {
+                  "type": "number"
+                }
+              },
+              "required": [
+                "count",
+                "max",
+                "mean",
+                "p50",
+                "p90",
+                "p99"
+              ],
+              "additionalProperties": false
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "estimated_cost_usd": {
+          "anyOf": [
+            {
+              "type": "number",
+              "minimum": 0
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "reported_providers": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "description": "provider id reported in responses -> count"
+        },
+        "reported_models": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "description": "model id reported in responses -> count"
+        },
+        "http_statuses": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "description": "HTTP status -> count"
+        },
+        "error_kinds": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "description": "transport error kind -> count"
+        }
+      },
+      "required": [
+        "error_kinds",
+        "estimated_cost_usd",
+        "http_statuses",
+        "latency_ms",
+        "reported_models",
+        "reported_providers",
+        "requests_refused",
+        "requests_submitted"
+      ],
+      "additionalProperties": false
+    }
+  },
+  "required": [
+    "overall",
+    "runs",
+    "telemetry"
+  ],
+  "additionalProperties": false
+}

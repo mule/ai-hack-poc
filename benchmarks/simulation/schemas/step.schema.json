@@ -1,0 +1,221 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/mule/ai-hack-poc/benchmarks/simulation/schemas/step.schema.json",
+  "title": "Simulation step row",
+  "description": "One line of steps.jsonl: one frontier resolution.",
+  "x-dataset-schema-version": "1.0.0",
+  "type": "object",
+  "properties": {
+    "run": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "step": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "frontier": {
+      "type": "string"
+    },
+    "request_id": {
+      "type": "string"
+    },
+    "outcome": {
+      "enum": [
+        "committed",
+        "sealed"
+      ]
+    },
+    "source": {
+      "enum": [
+        "director",
+        "fallback",
+        "none"
+      ],
+      "description": "Who supplied the committed room; none for a sealed exit."
+    },
+    "fallback": {
+      "type": "boolean",
+      "description": "True when the local rules fallback was used for this frontier, whatever the final outcome."
+    },
+    "fallback_reason": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "fallback_detail": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "rejections": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "description": "Placement rejection reasons seen for this frontier."
+    },
+    "room_id": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "room_type": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "size": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "danger": {
+      "anyOf": [
+        {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 5
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "repositioned": {
+      "type": "boolean"
+    },
+    "pruned_exits": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "wait_ticks": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "latency_ms": {
+      "anyOf": [
+        {
+          "type": "number"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "http_status": {
+      "anyOf": [
+        {
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "error_kind": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "reported_provider": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "reported_model": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "cost_usd": {
+      "anyOf": [
+        {
+          "type": "number",
+          "minimum": 0
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "player_turn": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "rooms_total": {
+      "type": "integer",
+      "minimum": 1
+    }
+  },
+  "required": [
+    "cost_usd",
+    "danger",
+    "error_kind",
+    "fallback",
+    "fallback_detail",
+    "fallback_reason",
+    "frontier",
+    "http_status",
+    "latency_ms",
+    "outcome",
+    "player_turn",
+    "pruned_exits",
+    "rejections",
+    "reported_model",
+    "reported_provider",
+    "repositioned",
+    "request_id",
+    "room_id",
+    "room_type",
+    "rooms_total",
+    "run",
+    "size",
+    "source",
+    "step",
+    "wait_ticks"
+  ],
+  "additionalProperties": false
+}

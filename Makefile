@@ -16,10 +16,12 @@ GODOT_LOG_DIR ?= /tmp
 # compile reports when it is loaded indirectly (e.g. a scene's script).
 # Optional third argument: a success sentinel that must appear in the log, so a
 # run that never reaches its own final verdict cannot pass on exit code alone.
+# `--log-file` precedes the other arguments so flags after a `--` (user
+# arguments for a script, e.g. `make simulate`) are not swallowed.
 # Usage: $(call godot_run,<godot args>,<log file>[,<success sentinel>])
 define godot_run
 rm -f $(2); \
-$(GODOT) --headless --path game $(1) --log-file $(2); rc=$$?; \
+$(GODOT) --headless --path game --log-file $(2) $(1); rc=$$?; \
 test -f $(2) || { echo "FAIL: no Godot log written to $(2)"; exit 1; }; \
 if grep -nE 'SCRIPT ERROR:|Parse Error:|Failed to load script' $(2); then echo "FAIL: script errors found in $(2)"; exit 1; fi; \
 if test -n "$(3)" && ! grep -qF "$(3)" $(2); then echo "FAIL: success sentinel '$(3)' missing from $(2)"; exit 1; fi; \
@@ -27,7 +29,13 @@ exit $$rc
 endef
 
 .DEFAULT_GOAL := help
-.PHONY: help need-venv setup run-director test lint format check godot-check godot-test godot-lint export-linux export-android clean
+# Headless dungeon simulation (issue #16). Output is generated data: it goes to
+# the git-ignored simulation-output/ directory, one timestamped folder per run.
+SIM_STAMP := $(shell date -u +%Y%m%dT%H%M%SZ)
+SIM_OUT   ?= $(CURDIR)/simulation-output/$(SIM_STAMP)
+SIM_ARGS  ?=
+
+.PHONY: help need-venv setup run-director test lint format check godot-check godot-test godot-lint simulate export-linux export-android clean
 
 help: ## List available targets
 	@grep -E '^[a-z-]+:.*## ' $(MAKEFILE_LIST) | awk -F':.*## ' '{printf "  %-14s %s\n", $$1, $$2}'
@@ -95,12 +103,22 @@ godot-test: ## Run Godot tests headlessly (mechanics plus optional contract, gen
 	else \
 		echo "game/tests/test_deferred_simulation.gd not present: skipping deferred simulation"; \
 	fi
+	@if test -f game/tests/test_simulation_harness.gd; then \
+		echo "Running dungeon simulation harness test (#16)"; \
+		$(call godot_run,-s res://tests/test_simulation_harness.gd,$(GODOT_LOG_DIR)/godot-simulation-harness.log,SUCCESS: All simulation harness checks passed); \
+	else \
+		echo "game/tests/test_simulation_harness.gd not present: skipping simulation harness test"; \
+	fi
 	@if test -f game/tests/test_scene_smoke.gd; then \
 		echo "Running scene smoke test"; \
 		$(call godot_run,-s res://tests/test_scene_smoke.gd,$(GODOT_LOG_DIR)/godot-scene-smoke.log); \
 	else \
 		echo "game/tests/test_scene_smoke.gd not present: skipping scene smoke test"; \
 	fi
+
+simulate: ## Headless dungeon simulation: offline rules baseline, 5 runs x 100 steps. SIM_ARGS='...' SIM_OUT=dir
+	@test -f game/simulation/run_simulation.gd || { echo "game/simulation/run_simulation.gd not found"; exit 1; }
+	@$(call godot_run,-s res://simulation/run_simulation.gd -- --out "$(SIM_OUT)" $(SIM_ARGS),$(GODOT_LOG_DIR)/godot-simulation.log,SIMULATION COMPLETE)
 
 godot-lint: ## Lint GDScript with gdlint (pip install gdtoolkit)
 	@command -v gdlint >/dev/null || { echo "gdlint not found: pip install gdtoolkit"; exit 1; }

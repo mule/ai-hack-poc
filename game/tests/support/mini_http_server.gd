@@ -4,10 +4,13 @@ extends RefCounted
 ## HTTP client without a live director. Call poll() every frame.
 ##   mode "reply": answer every request with response_status / response_body
 ##   mode "hang":  accept and read requests but never answer (timeout tests)
+## In "reply" mode an optional `responder` Callable(request: Dictionary) ->
+## {status, body} answers each request from its decoded JSON body instead.
 
 var mode := "reply"
 var response_status := 200
 var response_body := "{}"
+var responder: Callable = Callable()
 var port := 0
 ## Array of {method, target, headers (lowercase keys), body}
 var requests: Array[Dictionary] = []
@@ -48,8 +51,15 @@ func poll() -> void:
 		client.handled = true
 		requests.append(parsed)
 		if mode == "reply":
-			var payload := response_body.to_utf8_buffer()
-			var head := "HTTP/1.1 %d Status\r\nContent-Type: application/json\r\nContent-Length: %d\r\nConnection: close\r\n\r\n" % [response_status, payload.size()]
+			var status := response_status
+			var text := response_body
+			if responder.is_valid():
+				var decoded: Variant = JSON.parse_string(str(parsed.body))
+				var answer: Dictionary = responder.call(decoded if decoded is Dictionary else {})
+				status = int(answer.status)
+				text = str(answer.body)
+			var payload := text.to_utf8_buffer()
+			var head := "HTTP/1.1 %d Status\r\nContent-Type: application/json\r\nContent-Length: %d\r\nConnection: close\r\n\r\n" % [status, payload.size()]
 			peer.put_data(head.to_utf8_buffer())
 			peer.put_data(payload)
 

@@ -1,6 +1,8 @@
 # Benchmarks
 
-Status: **placeholder.** No tooling exists yet.
+Status: **partly delivered.** The simulation harness (issue #16) exists, see
+[`simulation/`](simulation/README.md) (`make simulate`). Replay, shadow
+evaluation and reports are still placeholders.
 
 Purpose (epic #1): replay recorded dungeon states against multiple providers
 through the director's canonical API, so providers are compared on identical
@@ -12,7 +14,8 @@ Planned scope, delivered by later issues:
 - Shadow evaluation of non-active providers without affecting gameplay.
 - Reports with p50/p90/p95/p99 latency, reliability, schema-failure rate, and
   token/cost figures where providers report them.
-- A simulation harness for driving many generations without a player.
+- ~~A simulation harness for driving many generations without a player.~~
+  Delivered by #16: [`simulation/`](simulation/README.md).
 
 Design constraints:
 
