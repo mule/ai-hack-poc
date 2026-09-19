@@ -1,0 +1,220 @@
+[gd_scene load_steps=5 format=3 uid="uid://cx4x0j4k0a8k1"]
+
+[ext_resource type="Script" path="res://src/main_game.gd" id="1_main"]
+[ext_resource type="Script" path="res://src/dungeon_renderer.gd" id="2_rend"]
+[ext_resource type="Script" path="res://src/game_ui.gd" id="3_ui"]
+
+[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_panel"]
+bg_color = Color(0.08, 0.09, 0.12, 0.85)
+corner_radius_top_left = 6
+corner_radius_top_right = 6
+corner_radius_bottom_right = 6
+corner_radius_bottom_left = 6
+
+[node name="Main" type="Node2D"]
+script = ExtResource("1_main")
+
+[node name="DungeonRenderer" type="Node2D" parent="."]
+script = ExtResource("2_rend")
+
+[node name="Camera2D" type="Camera2D" parent="."]
+zoom = Vector2(1.5, 1.5)
+position_smoothing_enabled = true
+
+[node name="CanvasLayer" type="CanvasLayer" parent="."]
+
+[node name="UI" type="Control" parent="CanvasLayer"]
+layout_mode = 3
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+mouse_filter = 2
+script = ExtResource("3_ui")
+
+[node name="TopBar" type="PanelContainer" parent="CanvasLayer/UI"]
+layout_mode = 1
+anchors_preset = 10
+anchor_right = 1.0
+offset_bottom = 44.0
+grow_horizontal = 2
+theme_override_styles/panel = SubResource("StyleBoxFlat_panel")
+
+[node name="HBox" type="HBoxContainer" parent="CanvasLayer/UI/TopBar"]
+layout_mode = 2
+theme_override_constants/separation = 16
+
+[node name="Title" type="Label" parent="CanvasLayer/UI/TopBar/HBox"]
+layout_mode = 2
+theme_override_colors/font_color = Color(1, 0.85, 0.4, 1)
+text = "  DUNGEON CRAWLER"
+
+[node name="HPLabel" type="Label" parent="CanvasLayer/UI/TopBar/HBox"]
+layout_mode = 2
+text = "HP: 20/20"
+
+[node name="HPBar" type="ProgressBar" parent="CanvasLayer/UI/TopBar/HBox"]
+custom_minimum_size = Vector2(120, 20)
+layout_mode = 2
+size_flags_vertical = 4
+max_value = 20.0
+value = 20.0
+show_percentage = false
+
+[node name="StatsLabel" type="Label" parent="CanvasLayer/UI/TopBar/HBox"]
+layout_mode = 2
+size_flags_horizontal = 3
+text = "ATK: 4 | Turn: 0 | Score: 0"
+
+[node name="LogPanel" type="PanelContainer" parent="CanvasLayer/UI"]
+layout_mode = 1
+anchors_preset = 12
+anchor_top = 1.0
+anchor_right = 1.0
+anchor_bottom = 1.0
+offset_top = -120.0
+offset_right = -220.0
+grow_horizontal = 2
+grow_vertical = 0
+theme_override_styles/panel = SubResource("StyleBoxFlat_panel")
+
+[node name="LogLabel" type="RichTextLabel" parent="CanvasLayer/UI/LogPanel"]
+layout_mode = 2
+bbcode_enabled = true
+text = "Welcome to the dungeon!"
+scroll_following = true
+
+[node name="TouchControls" type="Control" parent="CanvasLayer/UI"]
+layout_mode = 1
+anchors_preset = 3
+anchor_left = 1.0
+anchor_top = 1.0
+anchor_right = 1.0
+anchor_bottom = 1.0
+offset_left = -210.0
+offset_top = -210.0
+offset_right = -10.0
+offset_bottom = -10.0
+grow_horizontal = 0
+grow_vertical = 0
+
+[node name="UpBtn" type="Button" parent="CanvasLayer/UI/TouchControls"]
+layout_mode = 1
+anchors_preset = 5
+anchor_left = 0.5
+anchor_right = 0.5
+offset_left = -30.0
+offset_top = 10.0
+offset_right = 30.0
+offset_bottom = 70.0
+grow_horizontal = 2
+focus_mode = 0
+text = "▲"
+
+[node name="DownBtn" type="Button" parent="CanvasLayer/UI/TouchControls"]
+layout_mode = 1
+anchors_preset = 7
+anchor_left = 0.5
+anchor_top = 1.0
+anchor_right = 0.5
+anchor_bottom = 1.0
+offset_left = -30.0
+offset_top = -70.0
+offset_right = 30.0
+offset_bottom = -10.0
+grow_horizontal = 2
+grow_vertical = 0
+focus_mode = 0
+text = "▼"
+
+[node name="LeftBtn" type="Button" parent="CanvasLayer/UI/TouchControls"]
+layout_mode = 1
+anchors_preset = 4
+anchor_top = 0.5
+anchor_bottom = 0.5
+offset_left = 10.0
+offset_top = -30.0
+offset_right = 70.0
+offset_bottom = 30.0
+grow_vertical = 2
+focus_mode = 0
+text = "◀"
+
+[node name="RightBtn" type="Button" parent="CanvasLayer/UI/TouchControls"]
+layout_mode = 1
+anchors_preset = 6
+anchor_left = 1.0
+anchor_top = 0.5
+anchor_right = 1.0
+anchor_bottom = 0.5
+offset_left = -70.0
+offset_top = -30.0
+offset_right = -10.0
+offset_bottom = 30.0
+grow_horizontal = 0
+grow_vertical = 2
+focus_mode = 0
+text = "▶"
+
+[node name="WaitBtn" type="Button" parent="CanvasLayer/UI/TouchControls"]
+layout_mode = 1
+anchors_preset = 8
+anchor_left = 0.5
+anchor_top = 0.5
+anchor_right = 0.5
+anchor_bottom = 0.5
+offset_left = -25.0
+offset_top = -25.0
+offset_right = 25.0
+offset_bottom = 25.0
+grow_horizontal = 2
+grow_vertical = 2
+focus_mode = 0
+text = "Wait"
+
+[node name="DeathOverlay" type="ColorRect" parent="CanvasLayer/UI"]
+visible = false
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+color = Color(0, 0, 0, 0.75)
+
+[node name="VBox" type="VBoxContainer" parent="CanvasLayer/UI/DeathOverlay"]
+layout_mode = 1
+anchors_preset = 8
+anchor_left = 0.5
+anchor_top = 0.5
+anchor_right = 0.5
+anchor_bottom = 0.5
+offset_left = -150.0
+offset_top = -60.0
+offset_right = 150.0
+offset_bottom = 60.0
+grow_horizontal = 2
+grow_vertical = 2
+theme_override_constants/separation = 16
+
+[node name="GameOverLabel" type="Label" parent="CanvasLayer/UI/DeathOverlay/VBox"]
+layout_mode = 2
+theme_override_colors/font_color = Color(0.9, 0.2, 0.2, 1)
+theme_override_font_sizes/font_size = 32
+text = "YOU DIED"
+horizontal_alignment = 1
+
+[node name="RestartBtn" type="Button" parent="CanvasLayer/UI/DeathOverlay/VBox"]
+custom_minimum_size = Vector2(160, 48)
+layout_mode = 2
+size_flags_horizontal = 4
+focus_mode = 0
+text = "Restart (R)"
+
+[connection signal="pressed" from="CanvasLayer/UI/TouchControls/UpBtn" to="CanvasLayer/UI" method="_on_up_button_pressed"]
+[connection signal="pressed" from="CanvasLayer/UI/TouchControls/DownBtn" to="CanvasLayer/UI" method="_on_down_button_pressed"]
+[connection signal="pressed" from="CanvasLayer/UI/TouchControls/LeftBtn" to="CanvasLayer/UI" method="_on_left_button_pressed"]
+[connection signal="pressed" from="CanvasLayer/UI/TouchControls/RightBtn" to="CanvasLayer/UI" method="_on_right_button_pressed"]
+[connection signal="pressed" from="CanvasLayer/UI/TouchControls/WaitBtn" to="CanvasLayer/UI" method="_on_wait_button_pressed"]
+[connection signal="pressed" from="CanvasLayer/UI/DeathOverlay/VBox/RestartBtn" to="CanvasLayer/UI" method="_on_restart_button_pressed"]
