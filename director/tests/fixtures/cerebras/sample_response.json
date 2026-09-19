@@ -1,0 +1,27 @@
+{
+  "id": "chatcmpl-cerebras-test-12345",
+  "choices": [
+    {
+      "finish_reason": "stop",
+      "index": 0,
+      "message": {
+        "content": "{\"room_id\": \"cerebras-room-4\", \"depth\": 3, \"room_type\": \"chamber\", \"size\": \"medium\", \"danger\": 2, \"enemy_density\": 0.25, \"loot_density\": 0.5, \"secret_probability\": 0.0, \"has_secret\": false, \"exits\": [{\"direction\": \"south\", \"kind\": \"door\", \"locked\": false}, {\"direction\": \"east\", \"kind\": \"door\", \"locked\": false}], \"environmental_tags\": [\"dark\"], \"description\": \"A dark stone chamber with damp masonry.\"}",
+        "role": "assistant"
+      }
+    }
+  ],
+  "created": 1726750000,
+  "model": "qwen-3.8-27b",
+  "object": "chat.completion",
+  "usage": {
+    "completion_tokens": 85,
+    "prompt_tokens": 412,
+    "total_tokens": 497
+  },
+  "time_info": {
+    "queue_time": 0.0012,
+    "prompt_time": 0.0045,
+    "completion_time": 0.0421,
+    "total_time": 0.0478
+  }
+}

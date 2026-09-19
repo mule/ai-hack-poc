@@ -458,6 +458,103 @@ def test_room_for_a_different_depth_is_rejected():
     assert "depth" in outcome.response.metadata.error.message
 
 
+# --- rejected output keeps the call's telemetry -------------------------------
+
+REPORTED_USAGE = UsageStats(input_tokens=321, output_tokens=45)
+REPORTED_METADATA = {"upstream_id": "chatcmpl-42", "finish_reason": "length"}
+
+
+class Reporting(FakeProvider):
+    """Answers with ``payload`` plus usage and metadata, valid or not."""
+
+    def __init__(self, payload, provider_id: str = "reporting", **result_fields) -> None:
+        super().__init__(provider_id)
+        self._payload = payload
+        self._result_fields = result_fields or {
+            "usage": REPORTED_USAGE,
+            "provider_metadata": dict(REPORTED_METADATA),
+        }
+
+    async def decide(self, request):
+        return ProviderResult(payload=self._payload, **self._result_fields)
+
+
+@pytest.mark.parametrize(
+    ("payload", "code"),
+    [
+        ('{"room_id": 123, "depth": "x"}', ErrorKind.SCHEMA_VIOLATION),
+        ("Sure! Here is your room: {oops", ErrorKind.INVALID_JSON),
+        ('{"room_id": "cut-off', ErrorKind.INVALID_JSON),
+        ("   ", ErrorKind.EMPTY_RESPONSE),
+    ],
+    ids=["schema_violation", "invalid_json", "truncated_json", "empty"],
+)
+def test_rejected_provider_output_keeps_usage_and_provider_metadata(payload, code):
+    outcome = generate(make_service(Reporting(payload)))
+
+    assert_canonical_failure(outcome, code=code, status=502)
+    metadata = outcome.response.metadata
+    assert metadata.usage == REPORTED_USAGE
+    assert metadata.provider_metadata == REPORTED_METADATA
+    assert metadata.provider == "reporting"
+
+
+def test_room_for_a_different_depth_keeps_usage_and_provider_metadata():
+    request = make_request()
+    room = {**valid_room_dict(request), "depth": request.state.depth + 1}
+
+    outcome = generate(make_service(Reporting(json.dumps(room))), request)
+
+    assert_canonical_failure(outcome, code=ErrorKind.SCHEMA_VIOLATION, status=502)
+    assert outcome.response.metadata.usage == REPORTED_USAGE
+    assert outcome.response.metadata.provider_metadata == REPORTED_METADATA
+
+
+def test_success_still_reports_usage_and_metadata_unchanged():
+    request = make_request()
+
+    outcome = generate(make_service(Reporting(json.dumps(valid_room_dict(request)))), request)
+
+    assert outcome.status_code == 200
+    assert outcome.response.metadata.usage == REPORTED_USAGE
+    assert outcome.response.metadata.provider_metadata == REPORTED_METADATA
+
+
+def test_hostile_telemetry_on_rejected_output_cannot_break_the_failure_envelope():
+    hostile_usage = UsageStats.model_construct(input_tokens=-5, output_tokens="lots")
+
+    outcome = generate(
+        make_service(Reporting("not json {", usage=hostile_usage, provider_metadata="nope"))
+    )
+
+    assert_canonical_failure(outcome, code=ErrorKind.INVALID_JSON, status=502)
+    assert outcome.response.metadata.usage is None
+    assert outcome.response.metadata.provider_metadata == {}
+
+
+def test_oversized_metadata_on_rejected_output_is_dropped_not_fatal():
+    outcome = generate(
+        make_service(
+            Reporting(
+                "not json {",
+                usage=REPORTED_USAGE,
+                provider_metadata={"blob": "x" * 20_000},
+            )
+        )
+    )
+
+    assert_canonical_failure(outcome, code=ErrorKind.INVALID_JSON, status=502)
+    assert outcome.response.metadata.usage == REPORTED_USAGE
+    assert outcome.response.metadata.provider_metadata == {}
+
+
+def test_provider_error_and_selection_failures_still_carry_no_provider_telemetry():
+    outcome = generate(make_service(ClassifiedFailureProvider(ErrorKind.PROVIDER_ERROR, "x")))
+
+    assert outcome.response.metadata.usage is None
+    assert outcome.response.metadata.provider_metadata == {}
+
+
 def test_oversized_provider_metadata_cannot_break_the_envelope():
     class Chatty(FakeProvider):
         async def decide(self, request):
@@ -657,55 +754,6 @@ def test_non_json_mapping_output_is_a_502_schema_violation_not_a_500(payload):
     assert outcome.response.metadata.error.raw_excerpt is not None
 
 
-# --- telemetry survives a rejected provider result ----------------------------
-
-
-def _usage() -> UsageStats:
-    return UsageStats(input_tokens=812, output_tokens=231)
-
-
-@pytest.mark.parametrize(
-    ("payload", "code"),
-    [
-        ('{"room_id": "x", "depth"', ErrorKind.INVALID_JSON),
-        ({"room_id": "x"}, ErrorKind.SCHEMA_VIOLATION),
-        ("", ErrorKind.EMPTY_RESPONSE),
-        ({**valid_room_dict(make_request()), "depth": 99}, ErrorKind.SCHEMA_VIOLATION),
-    ],
-)
-def test_rejected_provider_output_keeps_usage_and_provider_metadata(payload, code):
-    result = ProviderResult(
-        payload=payload, usage=_usage(), provider_metadata={"finish_reason": "length"}
-    )
-
-    outcome = generate(make_service(RawResultProvider(result)))
-
-    assert_canonical_failure(outcome, code=code, status=502)
-    metadata = outcome.response.metadata
-    assert metadata.usage == _usage()
-    assert metadata.provider_metadata == {"finish_reason": "length"}
-
-
-def test_rejected_output_with_junk_telemetry_still_yields_a_canonical_failure():
-    result = ProviderResult(payload="{bad", usage="lots", provider_metadata=["nope"])  # type: ignore[arg-type]
-
-    outcome = generate(make_service(RawResultProvider(result)))
-
-    assert_canonical_failure(outcome, code=ErrorKind.INVALID_JSON, status=502)
-    assert outcome.response.metadata.usage is None
-    assert outcome.response.metadata.provider_metadata == {}
-
-
-def test_provider_reported_errors_still_carry_no_adapter_supplied_telemetry():
-    outcome = generate(
-        make_service(ClassifiedFailureProvider(ErrorKind.RATE_LIMITED, "secret text"))
-    )
-
-    assert_canonical_failure(outcome, code=ErrorKind.RATE_LIMITED, status=429)
-    assert outcome.response.metadata.usage is None
-    assert outcome.response.metadata.provider_metadata == {}
-
-
 # --- untrusted usage objects are canonicalized, not merely type-checked --------
 
 
@@ -729,7 +777,7 @@ def _mutated_usage() -> UsageStats:
         ),
         (
             UsageStats.model_construct(input_tokens="12", output_tokens=True),  # type: ignore[arg-type]
-            UsageStats(),
+            None,
         ),
         (
             UsageStats.model_construct(input_tokens=1, estimated_cost_usd=float("inf")),
@@ -741,7 +789,7 @@ def _mutated_usage() -> UsageStats:
         ),
         (
             UsageStats.model_construct(estimated_cost_usd=-0.5),
-            UsageStats(),
+            None,
         ),
         (UsageStats(input_tokens=3, output_tokens=4), UsageStats(input_tokens=3, output_tokens=4)),
     ],

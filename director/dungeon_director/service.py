@@ -342,7 +342,7 @@ def _canonical_usage(usage: object) -> UsageStats | None:
         if isinstance(checked, float) and not math.isfinite(checked):
             continue
         clean[name] = checked
-    return UsageStats(**clean)
+    return UsageStats(**clean) if clean else None
 
 
 def _coerce_room(payload: PlanPayload | None) -> RoomPlan:

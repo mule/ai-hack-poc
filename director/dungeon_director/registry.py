@@ -17,6 +17,7 @@ from dataclasses import dataclass
 
 from pydantic import BaseModel, ConfigDict
 
+from dungeon_director.cerebras import CerebrasProvider
 from dungeon_director.cloudflare_jev import CloudflareJevProvider
 from dungeon_director.errors import (
     DirectorConfigError,
@@ -178,20 +179,20 @@ def default_registry() -> ProviderRegistry:
     """The registry the service starts with.
 
     The offline rules baseline is always available. The optional hosted
-    providers (Cloudflare Jev, Groq) are always registered too, but report
+    providers (Cloudflare Jev, Groq, Cerebras) are always registered too, but report
     themselves unavailable until their credentials are configured, so a
     checkout without credentials keeps working with the offline default.
     """
     registry = ProviderRegistry()
     registry.register(RulesProvider())
-    for provider_type in (CloudflareJevProvider, GroqProvider):
+    for provider_type in (CloudflareJevProvider, GroqProvider, CerebrasProvider):
         _register_optional(registry, provider_type)
     return registry
 
 
 def _register_optional(
     registry: ProviderRegistry,
-    provider_type: type[CloudflareJevProvider] | type[GroqProvider],
+    provider_type: type[CloudflareJevProvider] | type[GroqProvider] | type[CerebrasProvider],
 ) -> None:
     """Register an environment-configured provider without letting it stop startup.
 

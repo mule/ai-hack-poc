@@ -28,7 +28,8 @@ include = ["dungeon_director*"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 markers = [
-    "live: makes real (billable) provider calls; requires RUN_LIVE_JEV=1 (Cloudflare Jev) or RUN_LIVE_GROQ=1 (Groq) plus credentials",
+    "live: makes real billable provider calls; requires provider-specific opt-in and credentials",
+    "live_cerebras: makes real billable Cerebras calls; requires RUN_LIVE_CEREBRAS=1 and credentials",
 ]
 
 [tool.ruff]

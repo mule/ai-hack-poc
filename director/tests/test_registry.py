@@ -36,11 +36,13 @@ def test_default_registry_offers_rules_plus_unconfigured_optional_providers(monk
 
     described = {d.id: d for d in registry.describe()}
 
-    assert set(described) == {"rules-baseline", "cloudflare-jev", "groq"}
+    assert set(described) == {"rules-baseline", "cloudflare-jev", "groq", "cerebras"}
     assert described["rules-baseline"].available is True
     assert described["cloudflare-jev"].available is False
     assert described["groq"].available is False
     assert described["groq"].default_model == "openai/gpt-oss-20b"
+    assert described["cerebras"].available is False
+    assert described["cerebras"].default_model == "qwen-3.8-27b"
     with pytest.raises(ProviderSelectionError) as info:
         registry.select("groq", None)
     assert info.value.reason is SelectionReason.PROVIDER_UNAVAILABLE

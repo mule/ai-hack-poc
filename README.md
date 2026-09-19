@@ -16,7 +16,7 @@ Early bootstrap. What exists today and what does not:
 | Component | Directory | State |
 |-----------|-----------|-------|
 | Godot 2D client (desktop + Android) | `game/` | Shell delivered by issue #4, developed alongside this one. Not part of the bootstrap files. |
-| Director service (FastAPI) | `director/` | Issue #5: `POST /v1/generate`, `GET /v1/config`, `GET /health`; provider registry; offline rules baseline as default. Issue #8 adds the `cloudflare-jev` adapter (see `director/docs/cloudflare-jev.md`) and issue #9 the `groq` GPT-OSS adapter (see `director/docs/groq.md`); live calls need credentials. |
+| Director service (FastAPI) | `director/` | Issue #5: `POST /v1/generate`, `GET /v1/config`, `GET /health`; provider registry; offline rules baseline as default. Issues #8-#10 add Cloudflare Jev, Groq GPT-OSS, and Cerebras Qwen adapters under `director/docs/`; live calls need credentials. |
 | Shared plan contract (`RoomPlan`) | `director/dungeon_director/contracts.py` | Owned by issue #3. |
 | Benchmarks / replay | `benchmarks/` | Placeholder README only. |
 | Observability | `observability/` | Placeholder README only. |
@@ -43,14 +43,15 @@ Early bootstrap. What exists today and what does not:
                                                       └─────────────────────┘
 ```
 
-(The providers shown are the planned initial set from the epic; the rules
-baseline, the Cloudflare Jev adapter and the Groq GPT-OSS adapter are implemented. Jev is TypeSafe's
+(The providers shown are the initial set from the epic; all four adapters are
+implemented. Jev is TypeSafe's
 non-generative decision model, reached through Cloudflare's
 `/accounts/<id>/ai/run` REST endpoint: one call asks a fixed set of typed
 choice/score/yes-no questions about the dungeon state, and adapter code
 composes the calibrated answers into a `RoomPlan`. Groq is a generative
 comparison point: one strict-JSON-schema chat completion returns the whole
-`RoomPlan`. The others plug in through the same provider interface.)
+`RoomPlan`. Cerebras provides the same canonical contract through fast Qwen
+models, so provider comparisons do not change game code.)
 
 ### Provider-independent, semantic plans
 
@@ -267,6 +268,14 @@ contract, prompt design, metadata fields and operator guide are in
 `director/docs/groq.md`; paid live tests in `director/tests/test_groq_live.py`
 run only with `RUN_LIVE_GROQ=1` **and** `GROQ_API_KEY`.
 
+The Cerebras Qwen provider (`cerebras` / `qwen-3.8-27b`, issue #10)
+uses Cerebras Inference's OpenAI-compatible chat completions endpoint with
+strict JSON schema output and disabled reasoning (`reasoning_effort: "none"`).
+It is registered but unavailable until `CEREBRAS_API_KEY` is set; its model is
+configurable with `CEREBRAS_MODEL`. The request contract, error mapping,
+sanitized samples, and opt-in live tests are documented in
+`director/docs/cerebras.md`.
+
 Adding a provider means subclassing `DungeonDirectorProvider`
 (`director/dungeon_director/providers.py`) and registering it in
 `default_registry()`; nothing in the game changes.
@@ -349,8 +358,11 @@ load; its contents belong to the game shell.
   hygiene as Jev. Missing or malformed optional Groq configuration leaves that
   provider `available: false` and the rules baseline (and Jev) starting
   normally; choosing it as the default still stops startup.
-- The Cerebras key and the OTLP endpoint in `.env.example` remain placeholders
-  for the remaining provider and telemetry issues.
+- The `cerebras` provider reads `CEREBRAS_API_KEY`, `CEREBRAS_MODEL` (default
+  `qwen-3.8-27b`), `CEREBRAS_MAX_COMPLETION_TOKENS` (default `512`) and
+  `CEREBRAS_API_BASE_URL` (default `https://api.cerebras.ai/v1`; HTTPS except
+  loopback) with the same credential hygiene. Invalid optional configuration
+  disables only Cerebras; choosing it as the default still stops startup.
 - Provider and model selection is configuration-driven: the game names a
   provider/model by stable id in the query string, never provider-specific logic.
 
@@ -363,10 +375,11 @@ director/       FastAPI director service
                       (timeout/validation/failure policy), providers.py,
                       registry.py, rules.py (baseline), cloudflare_jev.py
                       (TypeSafe Jev via Cloudflare, issue #8), groq.py
-                      (Groq GPT-OSS, issue #9), settings.py, contracts.py
-  docs/               Provider developer docs (cloudflare-jev.md, groq.md)
-  tests/              Offline tests + fixtures (incl. sanitized Jev samples)
-                 and live tests (test_cloudflare_jev_live.py, test_groq_live.py,
+                      (Groq GPT-OSS, issue #9), cerebras.py
+                      (Cerebras Qwen, issue #10), settings.py, contracts.py
+  docs/               Provider docs (cloudflare-jev.md, groq.md, cerebras.md)
+  tests/              Offline tests + fixtures (incl. sanitized provider samples)
+                 and live tests (Jev, Groq, and Cerebras,
                  credential- and opt-in-gated; conftest.py blocks the network
                  for every other test)
 benchmarks/     Replay/benchmark tooling (placeholder)
