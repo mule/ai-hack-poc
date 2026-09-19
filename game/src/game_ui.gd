@@ -29,7 +29,7 @@ func update_ui(game_state: RefCounted) -> void:
 	hp_bar.max_value = game_state.player_max_hp
 	hp_bar.value = game_state.player_hp
 	hp_label.text = "HP: %d/%d" % [game_state.player_hp, game_state.player_max_hp]
-	
+
 	stats_label.text = "ATK: %d | Turn: %d | Score: %d" % [
 		game_state.player_attack_power,
 		game_state.player_turns,
@@ -41,7 +41,7 @@ func update_ui(game_state: RefCounted) -> void:
 			stats_label.text += " | Exploring..."
 		if game_state.world.counters.fallbacks > 0:
 			stats_label.text += " | Fallbacks: %d" % game_state.world.counters.fallbacks
-	
+
 	if provider_label:
 		var p_name: String = String(game_state.get("active_provider") if "active_provider" in game_state else "")
 		var m_name: String = String(game_state.get("active_model") if "active_model" in game_state else "")

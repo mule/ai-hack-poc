@@ -46,12 +46,12 @@ func frontier_markers() -> Array[Dictionary]:
 func _draw() -> void:
 	if not game_state:
 		return
-		
+
 	# Draw tiles
 	for pos in game_state.map_tiles.keys():
 		var tile_type: int = game_state.map_tiles[pos]
 		var rect = Rect2(pos.x * TILE_SIZE, pos.y * TILE_SIZE, TILE_SIZE, TILE_SIZE)
-		
+
 		match tile_type:
 			GameState.TileType.WALL, GameState.TileType.SECRET_DOOR:
 				draw_rect(rect, COLOR_WALL)
@@ -82,7 +82,7 @@ func _draw() -> void:
 					draw_line(Vector2(pos.x * TILE_SIZE + 5, y), Vector2(pos.x * TILE_SIZE + TILE_SIZE - 5, y), COLOR_STAIRS, 2.0)
 
 	_draw_frontiers()
-				
+
 	# Draw items
 	for item in game_state.items:
 		var ipos = item["pos"]
@@ -111,14 +111,14 @@ func _draw() -> void:
 		var color = COLOR_ORC if enemy["type"] == GameState.EnemyType.ORC else COLOR_GOBLIN
 		draw_rect(rect, color)
 		draw_rect(rect, Color.WHITE, false, 1.5)
-		
+
 		# Draw HP bar above enemy
 		var hp_pct = float(enemy["hp"]) / float(enemy["max_hp"])
 		var bar_bg = Rect2(epos.x * TILE_SIZE + 2, epos.y * TILE_SIZE - 3, TILE_SIZE - 4, 3)
 		var bar_fg = Rect2(epos.x * TILE_SIZE + 2, epos.y * TILE_SIZE - 3, (TILE_SIZE - 4) * hp_pct, 3)
 		draw_rect(bar_bg, Color(0.2, 0.2, 0.2))
 		draw_rect(bar_fg, Color.RED)
-		
+
 	# Draw player
 	var ppos = game_state.player_pos
 	var prect = Rect2(ppos.x * TILE_SIZE + 3, ppos.y * TILE_SIZE + 3, TILE_SIZE - 6, TILE_SIZE - 6)

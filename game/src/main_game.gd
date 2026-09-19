@@ -47,7 +47,7 @@ func _ready() -> void:
 		state.active_model = selected_model
 	renderer.game_state = state
 	_setup_generation()
-	
+
 	if ui:
 		if not ui.dpad_pressed.is_connected(_on_dpad_move):
 			ui.dpad_pressed.connect(_on_dpad_move)
@@ -64,7 +64,7 @@ func _ready() -> void:
 	if provider_selector:
 		if not provider_selector.selection_applied.is_connected(_on_provider_selection_applied):
 			provider_selector.selection_applied.connect(_on_provider_selection_applied)
-		
+
 	_center_camera()
 	queue_redraw_all()
 
@@ -130,10 +130,10 @@ func _unhandled_input(event: InputEvent) -> void:
 		if get_viewport():
 			get_viewport().set_input_as_handled()
 		return
-		
+
 	if state.is_player_dead:
 		return
-		
+
 	if event.is_action_pressed("move_up"):
 		_on_dpad_move(Vector2i.UP)
 		if get_viewport():

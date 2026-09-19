@@ -29,7 +29,7 @@ func _init() -> void:
 	test_wait_action()
 	test_death_and_restart_mechanics()
 	test_static_map_reachability()
-	
+
 	execution_completed = true
 	print("\n--- Test Results: %d Passed, %d Failed (Completed: %s) ---" % [tests_passed, tests_failed, str(execution_completed)])
 	if tests_failed > 0 or not execution_completed:
@@ -61,11 +61,11 @@ func test_collision_mechanics() -> void:
 	var ok1 = state.player_action_step(Vector2i.UP) # (2, 1)
 	assert_true(ok1, "Stepping onto floor succeeds")
 	assert_eq(state.player_pos, Vector2i(2, 1), "Player position updated to (2,1)")
-	
+
 	var ok2 = state.player_action_step(Vector2i.UP) # into wall at (2, 0)
 	assert_true(not ok2, "Stepping into wall returns false")
 	assert_eq(state.player_pos, Vector2i(2, 1), "Player position remains unchanged at (2,1)")
-	
+
 	state.player_pos = Vector2i(1, 1)
 	var ok_wall_left = state.player_action_step(Vector2i.LEFT)
 	assert_true(not ok_wall_left, "Stepping left into wall at (0,1) fails")
@@ -76,20 +76,20 @@ func test_door_mechanics() -> void:
 	var state = GameStateScript.new()
 	state.enemies.clear()
 	state.player_pos = Vector2i(7, 3)
-	
+
 	assert_eq(state.get_tile(Vector2i(8, 3)), GameStateScript.TileType.DOOR_CLOSED, "Door at (8,3) is initially closed")
-	
+
 	# Closed door blocks enemy movement as well
 	var enemy = state.spawn_enemy(GameStateScript.EnemyType.GOBLIN, Vector2i(9, 3))
 	state.player_action_wait()
 	assert_eq(enemy["pos"], Vector2i(9, 3), "Enemy cannot walk through closed door at (8,3)")
-	
+
 	# First step towards door opens it but does not enter
 	var opened = state.player_action_step(Vector2i.RIGHT)
 	assert_true(opened, "Action towards closed door succeeds (opens door)")
 	assert_eq(state.get_tile(Vector2i(8, 3)), GameStateScript.TileType.DOOR_OPEN, "Door tile changed to DOOR_OPEN")
 	assert_eq(state.player_pos, Vector2i(7, 3), "Player stayed at (7,3) while opening door")
-	
+
 	# After door is opened, player can step onto the door tile
 	# (first defeat or remove enemy on 9,3 so it doesn't block step)
 	state.enemies.clear()
@@ -103,12 +103,12 @@ func test_enemy_movement_and_aggro() -> void:
 	state.enemies.clear()
 	state.items.clear()
 	state.player_pos = Vector2i(2, 2)
-	
+
 	# Spawn enemy within aggro range (Manhattan distance <= 6, e.g. at (2, 5) dist = 3)
 	var goblin = state.spawn_enemy(GameStateScript.EnemyType.GOBLIN, Vector2i(2, 5))
 	state.player_action_wait()
 	assert_eq(goblin["pos"], Vector2i(2, 4), "Goblin within aggro steps towards player")
-	
+
 	# Spawn enemy beyond aggro range (e.g. at (15, 14) dist > 6)
 	var far_orc = state.spawn_enemy(GameStateScript.EnemyType.ORC, Vector2i(15, 14))
 	state.player_action_wait()
@@ -118,7 +118,7 @@ func test_loot_pickup_and_full_hp() -> void:
 	print("\nTest 4: Loot Pickup & Full-HP Handling")
 	var state = GameStateScript.new()
 	state.enemies.clear()
-	
+
 	# When player HP is full (20/20), potion must NOT be consumed
 	state.player_pos = Vector2i(6, 1)
 	assert_eq(state.player_hp, 20, "Player HP is full")
@@ -127,7 +127,7 @@ func test_loot_pickup_and_full_hp() -> void:
 	assert_eq(state.player_pos, Vector2i(6, 2), "Player at (6,2)")
 	assert_eq(state.player_hp, 20, "Player HP remains 20")
 	assert_true(not state.get_item_at(Vector2i(6, 2)).is_empty(), "Potion is still on floor when HP is full")
-	
+
 	# Now injure player and step away, then step back onto potion
 	state.player_hp = 10
 	state.player_action_step(Vector2i.UP) # (6, 1)
@@ -135,7 +135,7 @@ func test_loot_pickup_and_full_hp() -> void:
 	assert_true(moved_injured, "Player stepped back onto potion while injured")
 	assert_eq(state.player_hp, 18, "Potion consumed: restored 8 HP (10 -> 18)")
 	assert_true(state.get_item_at(Vector2i(6, 2)).is_empty(), "Potion removed from floor")
-	
+
 	# Sword pickup increases attack
 	var old_atk = state.player_attack_power
 	var sword_pos = Vector2i(16, 2)
@@ -151,7 +151,7 @@ func test_combat_and_cardinal_melee() -> void:
 	state.enemies.clear()
 	state.items.clear()
 	state.player_pos = Vector2i(2, 2)
-	
+
 	# Test diagonal enemy cannot attack cardinally (Manhattan dist = 2, diagonal)
 	var diag_orc = state.spawn_enemy(GameStateScript.EnemyType.ORC, Vector2i(3, 3))
 	var hp_before = state.player_hp
@@ -159,7 +159,7 @@ func test_combat_and_cardinal_melee() -> void:
 	# Enemy was diagonal; either it takes a step to cardinally align or did not melee through diagonal
 	# If it stepped towards player (e.g. to (2,3) or (3,2)), it couldn't also attack on same turn
 	assert_eq(state.player_hp, hp_before, "Diagonal enemy did not damage player across corner")
-	
+
 	# Now test direct combat
 	state.enemies.clear()
 	var goblin = state.spawn_enemy(GameStateScript.EnemyType.GOBLIN, Vector2i(3, 2))
@@ -167,7 +167,7 @@ func test_combat_and_cardinal_melee() -> void:
 	assert_true(turn1, "Attack action taken")
 	assert_eq(goblin["hp"], 2, "Goblin took 4 damage (6 -> 2)")
 	assert_eq(state.player_hp, hp_before - goblin["attack"], "Goblin counterattacked cardinally")
-	
+
 	var turn2 = state.player_action_step(Vector2i.RIGHT)
 	assert_true(turn2, "Second attack action taken")
 	assert_true(goblin["hp"] <= 0, "Goblin killed")
@@ -180,15 +180,15 @@ func test_multiple_enemy_lethal_stop() -> void:
 	state.items.clear()
 	state.player_pos = Vector2i(3, 3)
 	state.player_hp = 3 # lethal to 4 dmg from Orc
-	
+
 	# Surround player with two Orcs (each has 4 dmg)
 	var orc1 = state.spawn_enemy(GameStateScript.EnemyType.ORC, Vector2i(2, 3)) # West
 	var orc2 = state.spawn_enemy(GameStateScript.EnemyType.ORC, Vector2i(4, 3)) # East
-	
+
 	state.player_action_wait()
 	assert_eq(state.player_hp, 0, "Player HP clamped to 0 on lethal blow")
 	assert_true(state.is_player_dead, "Player marked dead immediately")
-	
+
 	# Count how many times death was logged
 	var death_log_count = 0
 	for msg in state.message_log:
@@ -209,16 +209,16 @@ func test_death_and_restart_mechanics() -> void:
 	var state = GameStateScript.new()
 	state.enemies.clear()
 	state.items.clear()
-	
+
 	var orc = state.spawn_enemy(GameStateScript.EnemyType.ORC, Vector2i(2, 3))
 	state.player_hp = 2
 	state.player_action_wait()
 	assert_eq(state.player_hp, 0, "Player died")
 	assert_true(state.is_player_dead, "is_player_dead is true")
-	
+
 	var step_blocked = state.player_action_step(Vector2i.UP)
 	assert_true(not step_blocked, "Actions while dead are blocked")
-	
+
 	state.reset_game()
 	assert_true(not state.is_player_dead, "Player alive after reset")
 	assert_eq(state.player_hp, state.player_max_hp, "HP restored to max after reset")
@@ -232,11 +232,11 @@ func test_static_map_reachability() -> void:
 	for pos in state.map_tiles.keys():
 		if state.map_tiles[pos] == GameStateScript.TileType.DOOR_CLOSED:
 			state.map_tiles[pos] = GameStateScript.TileType.DOOR_OPEN
-			
+
 	var reachable: Dictionary = {}
 	var queue: Array[Vector2i] = [state.player_pos]
 	reachable[state.player_pos] = true
-	
+
 	while not queue.is_empty():
 		var curr = queue.pop_front()
 		for offset in [Vector2i.UP, Vector2i.DOWN, Vector2i.LEFT, Vector2i.RIGHT]:
@@ -244,13 +244,13 @@ func test_static_map_reachability() -> void:
 			if state.is_walkable(neighbor) and not reachable.has(neighbor):
 				reachable[neighbor] = true
 				queue.append(neighbor)
-				
+
 	# Count total walkable floor/door tiles in map
 	var total_walkable = 0
 	for pos in state.map_tiles.keys():
 		if state.is_walkable(pos):
 			total_walkable += 1
 			assert_true(reachable.has(pos), "Tile %s is reachable from spawn" % [str(pos)])
-			
+
 	assert_true(total_walkable > 50, "Static map has substantial walkable floor area (%d tiles)" % total_walkable)
 	assert_eq(reachable.size(), total_walkable, "All walkable tiles are 100% reachable via connected doors/corridors")

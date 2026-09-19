@@ -156,43 +156,43 @@ func _build_default_map() -> void:
 	# Room 2: (12,1) to (18,7)
 	# Corridor: (7,3) to (12,3)
 	# Door at (8,3)
-	
+
 	for y in range(grid_height):
 		for x in range(grid_width):
 			map_tiles[Vector2i(x, y)] = TileType.WALL
-	
+
 	# Carve Room 1 (Spawn room)
 	for y in range(1, 8):
 		for x in range(1, 8):
 			map_tiles[Vector2i(x, y)] = TileType.FLOOR
-			
+
 	# Carve Room 2 (East room)
 	for y in range(1, 8):
 		for x in range(12, 19):
 			map_tiles[Vector2i(x, y)] = TileType.FLOOR
-			
+
 	# Corridor connecting them
 	for x in range(8, 12):
 		map_tiles[Vector2i(x, 3)] = TileType.FLOOR
-		
+
 	# Place a closed door in the corridor at (8,3)
 	map_tiles[Vector2i(8, 3)] = TileType.DOOR_CLOSED
-	
+
 	# Room 3 (South room): (4, 9) to (15, 14)
 	for y in range(9, 15):
 		for x in range(4, 16):
 			map_tiles[Vector2i(x, y)] = TileType.FLOOR
-			
+
 	# Corridor down from Room 1: (4,8) to (4,9)
 	map_tiles[Vector2i(4, 8)] = TileType.DOOR_CLOSED
-	
+
 	player_pos = Vector2i(2, 2)
-	
+
 	# Spawn enemies
 	spawn_enemy(EnemyType.GOBLIN, Vector2i(5, 4))
 	spawn_enemy(EnemyType.ORC, Vector2i(15, 4))
 	spawn_enemy(EnemyType.GOBLIN, Vector2i(10, 12))
-	
+
 	# Spawn items
 	spawn_item(ItemType.HEALTH_POTION, Vector2i(6, 2))
 	spawn_item(ItemType.SWORD_BONUS, Vector2i(16, 2))
@@ -226,7 +226,7 @@ func spawn_enemy(enemy_type: String, pos: Vector2i) -> Dictionary:
 		"pos": pos,
 	}
 	next_enemy_id += 1
-	
+
 	if enemy_type == EnemyType.GOBLIN:
 		enemy["name"] = "Goblin"
 		enemy["hp"] = 6
@@ -242,7 +242,7 @@ func spawn_enemy(enemy_type: String, pos: Vector2i) -> Dictionary:
 		enemy["hp"] = 8
 		enemy["max_hp"] = 8
 		enemy["attack"] = 3
-		
+
 	enemies.append(enemy)
 	return enemy
 
@@ -253,7 +253,7 @@ func spawn_item(item_type: String, pos: Vector2i) -> Dictionary:
 		"pos": pos,
 	}
 	next_item_id += 1
-	
+
 	if item_type == ItemType.HEALTH_POTION:
 		item["name"] = "Health Potion"
 		item["heal_amount"] = 8
@@ -266,7 +266,7 @@ func spawn_item(item_type: String, pos: Vector2i) -> Dictionary:
 		item["name"] = "Shiny Bauble"
 		item["heal_amount"] = 0
 		item["attack_bonus"] = 0
-		
+
 	items.append(item)
 	return item
 
@@ -277,16 +277,16 @@ func player_action_step(dir: Vector2i) -> bool:
 		return false
 	if dir == Vector2i.ZERO:
 		return false
-		
+
 	var target_pos: Vector2i = player_pos + dir
-	
+
 	# 1. Check if there's an enemy -> Attack!
 	var target_enemy: Dictionary = get_enemy_at(target_pos)
 	if not target_enemy.is_empty():
 		_player_attack_enemy(target_enemy)
 		_process_turn()
 		return true
-		
+
 	# 2. Check if tile is a closed door -> Open it!
 	var tile: int = get_tile(target_pos)
 	if tile == TileType.DOOR_CLOSED or tile == TileType.SECRET_DOOR:
@@ -294,7 +294,7 @@ func player_action_step(dir: Vector2i) -> bool:
 		log_message("You open the door." if tile == TileType.DOOR_CLOSED else "You find a hidden door and open it.")
 		_process_turn()
 		return true
-		
+
 	# 3. Check if tile is walkable floor/open door
 	if is_walkable(target_pos):
 		player_pos = target_pos
@@ -302,7 +302,7 @@ func player_action_step(dir: Vector2i) -> bool:
 		_pickup_item_at(player_pos)
 		_process_turn()
 		return true
-		
+
 	# Unknown space beyond an exit that is still being generated
 	if world != null and not world.open_frontier_leading_to(target_pos).is_empty():
 		log_message("The way ahead is still taking shape...")
@@ -332,7 +332,7 @@ func _pickup_item_at(pos: Vector2i) -> void:
 	var item: Dictionary = get_item_at(pos)
 	if item.is_empty():
 		return
-		
+
 	if item["heal_amount"] > 0:
 		if player_hp >= player_max_hp:
 			log_message("You see a %s here, but your health is already full." % [item["name"]])
@@ -346,7 +346,7 @@ func _pickup_item_at(pos: Vector2i) -> void:
 		log_message("Found %s! Attack power increased by %d (Total: %d)." % [item["name"], item["attack_bonus"], player_attack_power])
 	else:
 		log_message("Picked up %s." % [item["name"]])
-		
+
 	player_score += 5
 	# Remove item from floor
 	for i in range(items.size()):
@@ -358,7 +358,7 @@ func _process_turn() -> void:
 	player_turns += 1
 	# Enemies take turn
 	_process_enemy_turns()
-	
+
 	# Check if player died (in case of environmental/other damage)
 	if player_hp <= 0 and not is_player_dead:
 		player_hp = 0
@@ -368,7 +368,7 @@ func _process_turn() -> void:
 func _process_enemy_turns() -> void:
 	# Filter dead enemies
 	enemies = enemies.filter(func(e): return e["hp"] > 0)
-	
+
 	for enemy in enemies:
 		if is_player_dead:
 			break
@@ -377,7 +377,7 @@ func _process_enemy_turns() -> void:
 		var dist_x: int = abs(delta.x)
 		var dist_y: int = abs(delta.y)
 		var manhattan_dist: int = dist_x + dist_y
-		
+
 		# Cardinal only (Manhattan distance == 1), enemies cannot hit diagonally through corners
 		if manhattan_dist == 1:
 			var dmg: int = enemy["attack"]
@@ -397,7 +397,7 @@ func _process_enemy_turns() -> void:
 				step_dir.x = 1 if delta.x > 0 else -1
 			else:
 				step_dir.y = 1 if delta.y > 0 else -1
-				
+
 			var cand_pos: Vector2i = epos + step_dir
 			# Don't step into player, closed doors, or walls, or other alive enemies
 			if cand_pos != player_pos and is_walkable(cand_pos) and get_enemy_at(cand_pos).is_empty():
