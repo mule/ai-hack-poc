@@ -168,6 +168,12 @@ jobs:
           GODOT_ANDROID_KEYSTORE_DEBUG_PASSWORD="android" \
           make export-android GODOT="$HOME/.local/bin/godot"
 
+      - name: Verify Android networking permission
+        run: |
+          "$ANDROID_HOME/build-tools/35.0.0/aapt" dump permissions game/builds/android/ai-hack-poc-debug.apk \
+            | tee /tmp/android-permissions.txt
+          grep -Fq "uses-permission: name='android.permission.INTERNET'" /tmp/android-permissions.txt
+
       - name: Upload Linux desktop artifact
         if: github.ref == 'refs/heads/main' || github.event_name == 'workflow_dispatch'
         uses: actions/upload-artifact@v6

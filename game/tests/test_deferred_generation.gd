@@ -746,6 +746,17 @@ func _test_http_client_fetch_config() -> void:
 	_check(await _wait_until(func(): return _served(server, results, 2)), "503 error delivered")
 	_check_eq(results[1].http_status, 503, "status 503 reported")
 
+	# A config request shares this client with generation requests. Cancelling all
+	# must finish the config callback so UI callers do not remain stuck fetching.
+	server.mode = "hang"
+	client.fetch_config(func(r: Dictionary) -> void: results.append(r))
+	_check(await _wait_until(func():
+		server.poll()
+		return server.requests.size() == 3), "hanging config request reached the server")
+	client.cancel_all()
+	_check(await _wait_until(func(): return results.size() == 3), "cancelled config callback completed")
+	_check(not results[2].transport_ok and results[2].error_kind == "cancelled", "config cancellation has a terminal result")
+
 	server.stop()
 	client.queue_free()
 	_end()

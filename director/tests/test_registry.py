@@ -49,9 +49,24 @@ def test_default_registry_offers_rules_plus_unconfigured_optional_providers(monk
     assert registry.select("rules-baseline", None).model == "builtin-v1"
 
 
-def test_invalid_optional_jev_environment_does_not_break_the_offline_default(monkeypatch, caplog):
-    monkeypatch.setenv("CLOUDFLARE_ACCOUNT_ID", "invalid account/id")
-    monkeypatch.setenv("CLOUDFLARE_API_TOKEN", "secret-that-must-not-be-logged")
+@pytest.mark.parametrize(
+    ("name", "value"),
+    [
+        ("CLOUDFLARE_ACCOUNT_ID", "invalid account/id"),
+        (
+            "CLOUDFLARE_JEV_API_BASE_URL",
+            "https://api.cloudflare.example:notaport/client/v4",
+        ),
+        ("CLOUDFLARE_JEV_API_BASE_URL", "https://api.cloudflare.example/client/v4?token=x"),
+    ],
+)
+def test_invalid_optional_jev_environment_does_not_break_the_offline_default(
+    monkeypatch, caplog, name, value
+):
+    secret = "secret-that-must-not-be-logged"
+    monkeypatch.setenv("CLOUDFLARE_ACCOUNT_ID", "account-1")
+    monkeypatch.setenv("CLOUDFLARE_API_TOKEN", secret)
+    monkeypatch.setenv(name, value)
 
     with caplog.at_level(logging.WARNING):
         registry = default_registry()
@@ -60,8 +75,9 @@ def test_invalid_optional_jev_environment_does_not_break_the_offline_default(mon
     assert registry.select("rules-baseline", None).model == "builtin-v1"
     assert described["cloudflare-jev"].available is False
     logged = "\n".join(record.getMessage() for record in caplog.records)
-    assert "secret-that-must-not-be-logged" not in logged
-    assert "invalid account/id" not in logged
+    assert secret not in logged
+    assert value not in logged
+    assert "cloudflare-jev" in logged and "provider disabled" in logged
 
 
 def test_groq_becomes_available_with_a_key_and_follows_the_configured_model(monkeypatch):
@@ -84,6 +100,7 @@ def test_groq_becomes_available_with_a_key_and_follows_the_configured_model(monk
         ("GROQ_REASONING_EFFORT", "turbo"),
         ("GROQ_API_BASE_URL", "http://remote.example/openai/v1"),
         ("GROQ_API_BASE_URL", "not a url"),
+        ("GROQ_API_BASE_URL", "https://api.groq.example:notaport/openai/v1"),
         ("GROQ_MAX_COMPLETION_TOKENS", "not-an-int"),
         ("GROQ_MAX_COMPLETION_TOKENS", "-7331"),
         ("GROQ_MODEL", "bad model id"),
@@ -231,7 +248,7 @@ def test_duplicate_provider_ids_are_rejected():
         registry.register(FakeProvider("alpha"))
 
 
-@pytest.mark.parametrize("bad_id", ["", "Upper", "has space", "-lead", "x" * 65, "a/b"])
+@pytest.mark.parametrize("bad_id", ["", "Upper", "has space", "-lead", "x" * 65, "a/b", "ok\n"])
 def test_provider_ids_must_be_stable_lowercase_slugs(bad_id):
     with pytest.raises(DirectorConfigError, match="provider id"):
         ProviderRegistry().register(FakeProvider(bad_id))
@@ -257,6 +274,12 @@ def test_model_ids_may_use_provider_style_names():
     registry = registry_with(FakeProvider("groq", models=("openai/gpt-oss-20b", "@cf/x:1")))
 
     assert registry.select("groq", "openai/gpt-oss-20b").model == "openai/gpt-oss-20b"
+
+
+@pytest.mark.parametrize("bad_model", ["", "has space", "-leading", "ok\n", "x" * 129])
+def test_model_ids_must_match_the_entire_identifier(bad_model):
+    with pytest.raises(DirectorConfigError, match="invalid model id"):
+        ProviderRegistry().register(FakeProvider("provider", models=(bad_model,)))
 
 
 def test_availability_check_that_raises_counts_as_unavailable_and_is_logged(caplog):

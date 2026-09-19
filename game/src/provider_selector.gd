@@ -28,6 +28,7 @@ var pending_provider := ""
 var pending_model := ""
 var is_selector_visible := false
 var transport: Variant = null
+var _config_refresh_id := 0
 
 
 func _ready() -> void:
@@ -68,17 +69,21 @@ func set_selector_visible(p_visible: bool) -> void:
 
 
 func refresh_config() -> void:
+	_config_refresh_id += 1
+	var refresh_id := _config_refresh_id
 	if status_label:
 		status_label.text = "Fetching director config..."
 	if apply_btn:
 		apply_btn.disabled = true
 	if transport == null or not transport.has_method("fetch_config"):
-		_on_config_loaded({"transport_ok": false, "error_kind": "offline"})
+		_on_config_loaded({"transport_ok": false, "error_kind": "offline"}, refresh_id)
 		return
-	transport.fetch_config(_on_config_loaded)
+	transport.fetch_config(_on_config_loaded.bind(refresh_id))
 
 
-func _on_config_loaded(res: Dictionary) -> void:
+func _on_config_loaded(res: Dictionary, refresh_id: int) -> void:
+	if refresh_id != _config_refresh_id:
+		return
 	if not res.get("transport_ok", false):
 		var err: String = str(res.get("error_kind", "offline"))
 		_show_offline_or_error("Cannot reach director config (%s). Using offline fallback." % err)

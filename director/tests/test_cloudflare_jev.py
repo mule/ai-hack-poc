@@ -255,7 +255,7 @@ def test_generate_without_credentials_is_a_classified_error():
 
 
 @pytest.mark.parametrize(
-    "account_id", ["acct/../../etc", "acct with space", "acct?token=x", "acct#frag"]
+    "account_id", ["acct/../../etc", "acct with space", "acct?token=x", "acct#frag", "acct\n"]
 )
 def test_account_id_is_charset_validated_before_it_reaches_a_url(account_id):
     with pytest.raises(DirectorConfigError):
@@ -269,11 +269,25 @@ def test_base_url_must_be_http_s():
 
 @pytest.mark.parametrize(
     "base_url",
-    ["http://api.cloudflare.example/client/v4", "https://", "api.cloudflare.example"],
+    [
+        "http://api.cloudflare.example/client/v4",
+        "https://",
+        "api.cloudflare.example",
+        "https://user:password@api.cloudflare.example/client/v4",
+        "https://api.cloudflare.example/client/v4?token=secret",
+        "https://api.cloudflare.example/client/v4#fragment",
+        "https://api.cloudflare.example:notaport/client/v4",
+        "https://api.cloudflare.example:65536/client/v4",
+        "https://[broken/client/v4",
+        "https://api.cloudflare.example/client/v4\n",
+        "https://api.cloudflare.example/client v4",
+    ],
 )
-def test_base_url_requires_https_for_remote_hosts_and_an_absolute_host(base_url):
-    with pytest.raises(DirectorConfigError):
+def test_base_url_rejects_unsafe_or_malformed_shapes_without_echoing_them(base_url):
+    with pytest.raises(DirectorConfigError) as info:
         JevConfig(account_id="acct", api_token="t", api_base_url=base_url)
+
+    assert base_url not in str(info.value)
 
 
 @pytest.mark.parametrize("host", ["localhost", "127.0.0.1", "[::1]"])

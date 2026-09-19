@@ -263,6 +263,8 @@ def test_invalid_configuration_names_the_variable_and_never_echoes_secrets(name,
         ("model", "openai/gpt-oss-20b\r\nX-Injected: 1"),
         ("api_base_url", "https://api.groq.example/openai/v1\n"),
         ("api_base_url", "https://api.groq.example/open ai/v1"),
+        ("api_base_url", "https://api.groq.example:notaport/openai/v1"),
+        ("api_base_url", "https://api.groq.example:65536/openai/v1"),
     ],
 )
 def test_direct_construction_rejects_trailing_newlines_and_control_characters(field, value):

@@ -86,6 +86,7 @@ DEFAULT_API_BASE_URL = "https://api.cloudflare.com/client/v4"
 REQUIRED_ENV_VARS = ("CLOUDFLARE_ACCOUNT_ID", "CLOUDFLARE_API_TOKEN")
 
 _ACCOUNT_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,128}$")
+_URL_RE = re.compile(r"[\x21-\x7e]{1,2048}")  # printable ASCII, no whitespace/control chars
 _TOKEN_MAX_CHARS = 4096
 _MAX_RESPONSE_BODY_BYTES = 1_048_576
 _LOOPBACK_HOSTS = {"localhost", "127.0.0.1", "::1"}
@@ -117,14 +118,33 @@ class JevConfig:
     api_token: str = field(default="", repr=False)
 
     def __post_init__(self) -> None:
-        if self.account_id and not _ACCOUNT_ID_RE.match(self.account_id):
+        if self.account_id and not _ACCOUNT_ID_RE.fullmatch(self.account_id):
             raise DirectorConfigError(
                 "CLOUDFLARE_ACCOUNT_ID must be alphanumeric with '_' or '-' "
                 f"(1-129 chars, starting alphanumeric); got {len(self.account_id)} invalid chars"
             )
-        parsed_url = urlsplit(self.api_base_url)
+        if not isinstance(self.api_base_url, str) or not _URL_RE.fullmatch(self.api_base_url):
+            raise DirectorConfigError(
+                "CLOUDFLARE_JEV_API_BASE_URL must not contain whitespace or control characters"
+            )
+        try:
+            parsed_url = urlsplit(self.api_base_url)
+            _validated_port = parsed_url.port
+        except ValueError:
+            raise DirectorConfigError(
+                "CLOUDFLARE_JEV_API_BASE_URL must be an absolute http(s) URL"
+            ) from None
         if parsed_url.scheme not in {"http", "https"} or not parsed_url.hostname:
             raise DirectorConfigError("CLOUDFLARE_JEV_API_BASE_URL must be an absolute http(s) URL")
+        if (
+            parsed_url.username is not None
+            or parsed_url.password is not None
+            or parsed_url.query
+            or parsed_url.fragment
+        ):
+            raise DirectorConfigError(
+                "CLOUDFLARE_JEV_API_BASE_URL must not contain credentials, a query or a fragment"
+            )
         if parsed_url.scheme == "http" and parsed_url.hostname not in _LOOPBACK_HOSTS:
             raise DirectorConfigError(
                 "CLOUDFLARE_JEV_API_BASE_URL must use https except for a loopback test server"

@@ -115,6 +115,141 @@ def _selection_labels(value: Any) -> list[str] | None:
     return labels
 
 
+def _is_finite_number(value: Any) -> bool:
+    return isinstance(value, int | float) and not isinstance(value, bool) and math.isfinite(value)
+
+
+def _document_problems(bundle: Bundle) -> list[str]:
+    """Validate nested values consumed by analysis after bundle verification."""
+    problems: list[str] = []
+
+    run = bundle.manifest.get("run")
+    if not isinstance(run, dict):
+        problems.append("manifest run must be an object")
+    else:
+        for name in ("started_at", "finished_at"):
+            if not isinstance(run.get(name), str) or not run[name]:
+                problems.append(f"manifest run {name} must be a non-empty string")
+        if run.get("label") is not None and not isinstance(run["label"], str):
+            problems.append("manifest run label must be a string or null")
+        if not isinstance(run.get("live"), bool):
+            problems.append("manifest run live must be boolean")
+
+    identity = bundle.manifest.get("corpus")
+    if isinstance(identity, dict):
+        for name in ("corpus_id", "kind", "requests_sha256"):
+            if not isinstance(identity.get(name), str) or not identity[name]:
+                problems.append(f"manifest corpus {name} must be a non-empty string")
+        records = identity.get("records")
+        if isinstance(records, bool) or not isinstance(records, int) or records < 1:
+            problems.append("manifest corpus records must be a positive integer")
+
+    protocol = bundle.protocol
+    for name in ("protocol_id", "protocol_version"):
+        if not isinstance(protocol.get(name), str) or not protocol[name]:
+            problems.append(f"protocol {name} must be a non-empty string")
+    tail = protocol.get("min_tail_samples")
+    if isinstance(tail, bool) or not isinstance(tail, int) or tail < 1:
+        problems.append("protocol min_tail_samples must be a positive integer")
+    percentiles = protocol.get("percentiles")
+    if not isinstance(percentiles, dict) or not percentiles:
+        problems.append("protocol percentiles must be a non-empty object")
+    else:
+        for name, value in percentiles.items():
+            if (
+                not isinstance(name, str)
+                or not name
+                or not _is_finite_number(value)
+                or not 0 <= value < 1
+            ):
+                problems.append(
+                    "protocol percentiles must map non-empty names to numbers from 0 up to 1"
+                )
+                break
+
+    parameters = protocol.get("parameters")
+    if isinstance(parameters, dict):
+        if not isinstance(parameters.get("tier"), str) or not parameters["tier"]:
+            problems.append("protocol tier must be a non-empty string")
+        timeout = parameters.get("timeout_seconds")
+        if not _is_finite_number(timeout) or not 0 < timeout <= 300:
+            problems.append("protocol timeout_seconds must be greater than 0 and at most 300")
+        if not isinstance(parameters.get("overrides"), dict):
+            problems.append("protocol overrides must be an object")
+
+    environment = bundle.environment
+    code = environment.get("code")
+    if not isinstance(code, dict):
+        problems.append("environment code must be an object")
+    else:
+        if code.get("git_commit") is not None and not isinstance(code["git_commit"], str):
+            problems.append("environment git_commit must be a string or null")
+        if code.get("git_dirty") is not None and not isinstance(code["git_dirty"], bool):
+            problems.append("environment git_dirty must be boolean or null")
+    runtime = environment.get("runtime")
+    if not isinstance(runtime, dict):
+        problems.append("environment runtime must be an object")
+    else:
+        for name in ("python", "platform"):
+            if not isinstance(runtime.get(name), str) or not runtime[name]:
+                problems.append(f"environment runtime {name} must be a non-empty string")
+        packages = runtime.get("packages")
+        if not isinstance(packages, dict) or any(
+            not isinstance(name, str) or value is not None and not isinstance(value, str)
+            for name, value in packages.items()
+        ):
+            problems.append("environment runtime packages must map names to strings or null")
+    if environment.get("vantage_point") is not None and not isinstance(
+        environment["vantage_point"], str
+    ):
+        problems.append("environment vantage_point must be a string or null")
+    providers = environment.get("providers")
+    if isinstance(providers, list):
+        for index, entry in enumerate(providers, start=1):
+            if not isinstance(entry, dict):
+                continue
+            config = entry.get("config")
+            if not isinstance(config, dict):
+                problems.append(f"environment provider {index} config must be an object")
+                continue
+            if not isinstance(config.get("fields"), dict):
+                problems.append(f"environment provider {index} config fields must be an object")
+            withheld = config.get("withheld")
+            if not isinstance(withheld, list) or not all(
+                isinstance(name, str) for name in withheld
+            ):
+                problems.append(
+                    f"environment provider {index} config withheld must be a list of strings"
+                )
+            if not isinstance(config.get("credentials_present"), bool):
+                problems.append(
+                    f"environment provider {index} config credentials_present must be boolean"
+                )
+
+    provenance = bundle.corpus_manifest.get("provenance")
+    if not isinstance(provenance, dict):
+        problems.append("corpus provenance must be an object")
+    elif provenance.get("recorded_providers") is not None and not isinstance(
+        provenance["recorded_providers"], dict
+    ):
+        problems.append("corpus recorded_providers must be an object when present")
+    golden = bundle.corpus_manifest.get("expected_offline")
+    if golden is not None and not isinstance(golden, dict):
+        problems.append("corpus expected_offline must be an object when present")
+    elif isinstance(golden, dict):
+        for label, entry in golden.items():
+            if (
+                not isinstance(label, str)
+                or not isinstance(entry, dict)
+                or not isinstance(entry.get("plan_digest"), str)
+            ):
+                problems.append(
+                    "corpus expected_offline must map labels to objects with a plan_digest"
+                )
+                break
+    return problems
+
+
 def _row_problems(row: dict[str, Any], where: str, *, phase: str) -> list[str]:
     problems: list[str] = []
     required = (
@@ -145,12 +280,7 @@ def _row_problems(row: dict[str, Any], where: str, *, phase: str) -> list[str]:
         if isinstance(row[name], bool) or not isinstance(row[name], int):
             problems.append(f"{where}: {name} must be an integer")
     latency = row["latency_ms"]
-    if (
-        isinstance(latency, bool)
-        or not isinstance(latency, int | float)
-        or not math.isfinite(latency)
-        or latency < 0
-    ):
+    if not _is_finite_number(latency) or latency < 0:
         problems.append(f"{where}: latency_ms must be a finite non-negative number")
     if not isinstance(row["success"], bool):
         problems.append(f"{where}: success must be boolean")
@@ -168,6 +298,26 @@ def _row_problems(row: dict[str, Any], where: str, *, phase: str) -> list[str]:
         problems.append(f"{where}: a failed result needs no room and a string error_code")
     if row["retry_count"] is not None:
         problems.append(f"{where}: retry_count must be null because this protocol does not retry")
+    usage = row.get("usage")
+    if usage is not None:
+        if not isinstance(usage, dict):
+            problems.append(f"{where}: usage must be an object or null")
+        else:
+            for name in ("input_tokens", "output_tokens", "total_tokens"):
+                value = usage.get(name)
+                if value is not None and (
+                    isinstance(value, bool) or not isinstance(value, int) or value < 0
+                ):
+                    problems.append(f"{where}: usage {name} must be a non-negative integer or null")
+            cost = usage.get("estimated_cost_usd")
+            if cost is not None and (not _is_finite_number(cost) or cost < 0):
+                problems.append(
+                    f"{where}: usage estimated_cost_usd must be a finite non-negative "
+                    "number or null"
+                )
+    provider_metadata = row.get("provider_metadata")
+    if provider_metadata is not None and not isinstance(provider_metadata, dict):
+        problems.append(f"{where}: provider_metadata must be an object or null")
     return problems
 
 
@@ -226,6 +376,7 @@ def verify_bundle(path: str | Path) -> list[str]:
         return [f"{root}: manifest is not an evaluation-bundle {BUNDLE_SCHEMA_VERSION}"]
     if len(labels) != len(set(labels)) or not labels:
         problems.append("manifest selections must be non-empty and unique")
+    problems.extend(_document_problems(bundle))
 
     raw_files = manifest.get("raw_files")
     if not isinstance(raw_files, dict):

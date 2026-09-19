@@ -15,7 +15,8 @@ extends Node
 ## result dictionary is {transport_ok, error_kind, http_status, body}:
 ##   transport_ok=true   an HTTP response arrived (any status; the body is
 ##                       canonical for both success and failure envelopes)
-##   error_kind          "timeout" | "transport_failure" | "request_failed"
+##   error_kind          "timeout" | "transport_failure" | "request_failed" |
+##                       "cancelled" (config requests only)
 
 const GENERATE_PATH := "/v1/generate"
 const CONFIG_PATH := "/v1/config"
@@ -23,6 +24,10 @@ const MAX_BODY_BYTES := 1_048_576
 
 var base_url := "http://127.0.0.1:8000"
 var timeout_sec := 5.0
+## HTTPRequest -> {on_done: Callable, report_cancel: bool}. Generation requests
+## deliberately stay silent on coordinator shutdown, while config requests need
+## a terminal result so the provider selector can leave its fetching state.
+var _pending: Dictionary = {}
 
 
 func fetch_config(on_done: Callable) -> void:
@@ -30,11 +35,13 @@ func fetch_config(on_done: Callable) -> void:
 	http.timeout = timeout_sec
 	http.body_size_limit = MAX_BODY_BYTES
 	add_child(http)
-	http.request_completed.connect(_on_completed.bind(http, on_done), CONNECT_ONE_SHOT)
+	_pending[http] = {"on_done": on_done, "report_cancel": true}
+	http.request_completed.connect(_on_completed.bind(http), CONNECT_ONE_SHOT)
 	var headers := PackedStringArray(["Accept: application/json"])
 	var url := base_url.rstrip("/") + CONFIG_PATH
 	var err := http.request(url, headers, HTTPClient.METHOD_GET)
 	if err != OK:
+		_pending.erase(http)
 		http.queue_free()
 		on_done.call_deferred(_failure("request_failed"))
 
@@ -45,10 +52,12 @@ func submit(request: Dictionary, options: Dictionary, on_done: Callable) -> void
 	http.timeout = float(options.get("timeout_sec", timeout_sec))
 	http.body_size_limit = MAX_BODY_BYTES
 	add_child(http)
-	http.request_completed.connect(_on_completed.bind(http, on_done), CONNECT_ONE_SHOT)
+	_pending[http] = {"on_done": on_done, "report_cancel": false}
+	http.request_completed.connect(_on_completed.bind(http), CONNECT_ONE_SHOT)
 	var headers := PackedStringArray(["Content-Type: application/json", "Accept: application/json"])
 	var err := http.request(_url(options), headers, HTTPClient.METHOD_POST, JSON.stringify(request))
 	if err != OK:
+		_pending.erase(http)
 		http.queue_free()
 		on_done.call_deferred(_failure("request_failed"))
 
@@ -58,10 +67,16 @@ func poll() -> void:
 
 
 func cancel_all() -> void:
-	for child in get_children():
-		if child is HTTPRequest:
-			child.cancel_request()
-			child.queue_free()
+	var pending := _pending.duplicate()
+	_pending.clear()
+	for http: HTTPRequest in pending:
+		var item: Dictionary = pending[http]
+		if is_instance_valid(http):
+			http.cancel_request()
+			http.queue_free()
+		if item.report_cancel:
+			var on_done: Callable = item.on_done
+			on_done.call_deferred(_failure("cancelled"))
 
 
 func _url(options: Dictionary) -> String:
@@ -78,7 +93,12 @@ func _url(options: Dictionary) -> String:
 	return url
 
 
-func _on_completed(result: int, response_code: int, _headers: PackedStringArray, body: PackedByteArray, http: HTTPRequest, on_done: Callable) -> void:
+func _on_completed(result: int, response_code: int, _headers: PackedStringArray, body: PackedByteArray, http: HTTPRequest) -> void:
+	if not _pending.has(http):
+		return
+	var item: Dictionary = _pending[http]
+	_pending.erase(http)
+	var on_done: Callable = item.on_done
 	http.queue_free()
 	if result == HTTPRequest.RESULT_TIMEOUT:
 		on_done.call(_failure("timeout"))

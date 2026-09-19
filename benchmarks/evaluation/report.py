@@ -100,11 +100,44 @@ def compute_metrics(bundle: Bundle, pricing: dict[tuple[str, str], dict[str, Any
         provider, _, model = label.partition("/")
         warm = sorted(bundle.rows_for(label, "warmup"), key=lambda r: r["sequence"])
         first = [r for r in rows if r["iteration"] == 1]
-        by_request: dict[str, set[str]] = defaultdict(set)
+        by_request: dict[str, list[dict[str, Any]]] = defaultdict(list)
         for r in rows:
-            if r.get("success"):
-                by_request[r["request_id"]].add(json.dumps(r["room"], sort_keys=True))
-        repeated = [rid for rid in by_request if sum(x["request_id"] == rid for x in rows) > 1]
+            by_request[r["request_id"]].append(r)
+        complete_successes = {
+            request_id
+            for request_id, attempts in by_request.items()
+            if all(attempt["success"] for attempt in attempts)
+        }
+        repeated = list(by_request) if bundle.protocol["parameters"]["iterations"] > 1 else []
+        identical_outcomes = 0
+        identical_successful_plans = 0
+        for request_id in repeated:
+            attempts = by_request[request_id]
+            outcomes = {
+                (
+                    "success",
+                    json.dumps(attempt["room"], sort_keys=True, separators=(",", ":")),
+                )
+                if attempt["success"]
+                else ("failure", attempt["error_code"])
+                for attempt in attempts
+            }
+            identical_outcomes += len(outcomes) == 1
+            if request_id in complete_successes:
+                plans = {
+                    json.dumps(attempt["room"], sort_keys=True, separators=(",", ":"))
+                    for attempt in attempts
+                }
+                identical_successful_plans += len(plans) == 1
+        outcome_rate = round(identical_outcomes / len(repeated), 4) if repeated else None
+        complete_success_rate = (
+            round(len(complete_successes) / len(by_request), 4) if by_request else None
+        )
+        successful_plan_rate = (
+            round(identical_successful_plans / len(complete_successes), 4)
+            if repeated and complete_successes
+            else None
+        )
         metrics[label] = {
             "sample_adequacy": sample_adequacy(len(rows), _protocol_view(bundle)),
             "cold_start": (
@@ -120,10 +153,18 @@ def compute_metrics(bundle: Bundle, pricing: dict[tuple[str, str], dict[str, Any
             "cost": derive_cost(rows, pricing.get((provider, model))),
             "determinism": {
                 "plan_digest": plan_digest(first),
-                "identical_across_iterations_rate": (
-                    round(sum(len(by_request[r]) == 1 for r in repeated) / len(repeated), 4)
-                    if repeated
-                    else None
+                "requests_evaluated": len(by_request),
+                "requests_successful_in_every_iteration": len(complete_successes),
+                "complete_success_coverage_rate": complete_success_rate,
+                # Retained for metrics consumers; unlike the old calculation, failures
+                # are outcomes and therefore cannot disappear from the denominator.
+                "identical_across_iterations_rate": outcome_rate,
+                "identical_outcomes_across_iterations_rate": outcome_rate,
+                "identical_successful_plans_rate": successful_plan_rate,
+                "basis": (
+                    "outcomes include successful room plans and failure error codes; "
+                    "successful-plan consistency includes only requests that succeeded "
+                    "in every iteration"
                 ),
                 "corpus_expected_digest_matches": (
                     golden[label]["plan_digest"] == plan_digest(first) if label in golden else None
@@ -422,7 +463,9 @@ def render_report(
         ]  # fmt: skip
     determinism_rows = [
         [label, m["determinism"]["plan_digest"][:16],
-         m["determinism"]["identical_across_iterations_rate"],
+         m["determinism"]["complete_success_coverage_rate"],
+         m["determinism"]["identical_outcomes_across_iterations_rate"],
+         m["determinism"]["identical_successful_plans_rate"],
          m["determinism"]["corpus_expected_digest_matches"]]
         for label, m in metrics.items()
     ]  # fmt: skip
@@ -430,10 +473,15 @@ def render_report(
         "### Reproducibility of the returned plans",
         "",
         _table(
-            ["provider/model", "plan digest (iteration 1)", "identical across iterations",
+            ["provider/model", "plan digest (iteration 1)", "complete success coverage",
+             "identical outcomes across iterations", "identical successful plans",
              "matches corpus expected digest"],
             determinism_rows,
         ),
+        "Outcome consistency includes both returned plans and failure codes. Successful-plan "
+        "consistency covers only requests that succeeded in every iteration, and the coverage "
+        "column shows how much of the corpus met that condition.",
+        "",
         "## 5. Validity and limitations",
         "",
         "Flagged for this run:",

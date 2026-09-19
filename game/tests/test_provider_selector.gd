@@ -13,6 +13,7 @@ const DungeonContracts = preload("res://contracts/dungeon_contracts.gd")
 const GameState = preload("res://src/game_state.gd")
 const DungeonWorld = preload("res://world/dungeon_world.gd")
 const GenerationCoordinator = preload("res://world/generation_coordinator.gd")
+const GenerationClient = preload("res://world/generation_client.gd")
 const ScriptedTransport = preload("res://tests/support/scripted_transport.gd")
 const StubDirector = preload("res://tests/support/stub_director.gd")
 const MiniHttpServer = preload("res://tests/support/mini_http_server.gd")
@@ -43,6 +44,8 @@ func _run() -> void:
 	await _step("test_selector_population_and_switching", _test_selector_population_and_switching)
 	await _step("test_selector_handles_unavailable_provider", _test_selector_handles_unavailable_provider)
 	await _step("test_selector_handles_offline_fallback", _test_selector_handles_offline_fallback)
+	await _step("test_selector_ignores_stale_config_response", _test_selector_ignores_stale_config_response)
+	await _step("test_selector_recovers_after_config_cancellation", _test_selector_recovers_after_config_cancellation)
 	await _step("test_debug_hud_toggle_and_display", _test_debug_hud_toggle_and_display)
 	await _step("test_debug_hud_metadata_and_jev_probabilities", _test_debug_hud_metadata_and_jev_probabilities)
 	await _step("test_debug_hud_clears_stale_metadata_on_fallback", _test_debug_hud_clears_stale_metadata_on_fallback)
@@ -229,6 +232,86 @@ func _test_selector_handles_offline_fallback() -> void:
 	_check_eq(applied_signals.size(), 1, "selection_applied emitted on apply")
 	_check_eq(applied_signals[0], ["rules-baseline", "builtin-v1"], "offline fallback forwards rules-baseline and builtin-v1")
 
+	main.queue_free()
+	_end()
+
+
+func _test_selector_ignores_stale_config_response() -> void:
+	print("\nTest: ProviderSelector ignores an older refresh that completes last")
+	var transport := ScriptedTransport.new()
+	var packed := load("res://scenes/main.tscn")
+	var main: Node = packed.instantiate()
+	root.add_child(main)
+	var selector: ProviderSelector = main.provider_selector
+
+	selector.open_selector(transport, "", "")
+	selector.refresh_config()
+	_check_eq(transport.config_requests.size(), 2, "two independently completable config requests queued")
+
+	var fresh_result := _config_result("groq", "fresh-model")
+	transport.config_requests[1].call(fresh_result)
+	_check_eq(selector.pending_provider, "groq", "newer refresh populates the selected provider")
+	_check_eq(selector.pending_model, "fresh-model", "newer refresh populates the selected model")
+	_check(selector.status_label.text.contains("Ready"), "newer refresh leaves selector ready")
+
+	transport.config_requests[0].call({"transport_ok": false, "error_kind": "timeout", "http_status": 0, "body": ""})
+	_check_eq(selector.pending_provider, "groq", "late older failure cannot replace the newer provider")
+	_check_eq(selector.pending_model, "fresh-model", "late older failure cannot replace the newer model")
+	_check(selector.status_label.text.contains("Ready"), "late older failure cannot replace the ready status")
+	_check(not selector.apply_btn.disabled, "newer valid selection remains applicable")
+
+	main.queue_free()
+	_end()
+
+
+func _test_selector_recovers_after_config_cancellation() -> void:
+	print("\nTest: ProviderSelector leaves fetching state after shared-client cancellation and can refresh")
+	var server := MiniHttpServer.new()
+	_check(server.start(), "loopback test server started for selector cancellation")
+	server.mode = "hang"
+	var client := GenerationClient.new()
+	client.base_url = "http://127.0.0.1:%d" % server.port
+	client.timeout_sec = 5.0
+	root.add_child(client)
+
+	var packed := load("res://scenes/main.tscn")
+	var main: Node = packed.instantiate()
+	root.add_child(main)
+	var selector: ProviderSelector = main.provider_selector
+	selector.open_selector(client, "", "")
+
+	var request_started := false
+	for _frame in range(120):
+		server.poll()
+		await process_frame
+		if server.requests.size() == 1:
+			request_started = true
+			break
+	_check(request_started, "config request reached the hanging server")
+	client.cancel_all()
+	for _frame in range(3):
+		await process_frame
+
+	_check(not selector.status_label.text.contains("Fetching"), "cancellation completes the selector request")
+	_check(selector.status_label.text.contains("cancelled"), "cancellation reason is visible")
+	_check(not selector.apply_btn.disabled, "offline fallback remains selectable after cancellation")
+
+	server.mode = "reply"
+	server.response_body = str(_config_result("groq", "recovered-model").body)
+	selector.refresh_config()
+	var recovered := false
+	for _frame in range(300):
+		server.poll()
+		await process_frame
+		if selector.config_data != null and selector.pending_provider == "groq":
+			recovered = true
+			break
+	_check(recovered, "a later refresh succeeds after cancellation")
+	_check_eq(selector.pending_model, "recovered-model", "recovered refresh selects the returned model")
+	_check(selector.status_label.text.contains("Ready"), "recovered selector is ready")
+
+	server.stop()
+	client.queue_free()
 	main.queue_free()
 	_end()
 
@@ -558,3 +641,22 @@ func _test_main_scene_selector_and_hud_interaction() -> void:
 
 	main.queue_free()
 	_end()
+
+
+func _config_result(provider_id: String, model_id: String) -> Dictionary:
+	return {
+		"transport_ok": true,
+		"http_status": 200,
+		"body": JSON.stringify({
+			"default_provider": provider_id,
+			"default_model": model_id,
+			"providers": [
+				{
+					"id": provider_id,
+					"available": true,
+					"default_model": model_id,
+					"models": [model_id],
+				}
+			],
+		}),
+	}

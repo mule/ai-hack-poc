@@ -144,14 +144,23 @@ class GroqConfig:
                 "GROQ_MODEL must be a model id such as 'openai/gpt-oss-20b' "
                 "(letters, digits, '_', '.', ':', '/', '@', '-'; at most 128 chars)"
             )
-        parsed = urlsplit(self.api_base_url)
-        if not _URL_RE.fullmatch(self.api_base_url):
+        if not isinstance(self.api_base_url, str) or not _URL_RE.fullmatch(self.api_base_url):
             raise DirectorConfigError(
                 "GROQ_API_BASE_URL must not contain whitespace or control characters"
             )
+        try:
+            parsed = urlsplit(self.api_base_url)
+            _validated_port = parsed.port
+        except ValueError:
+            raise DirectorConfigError("GROQ_API_BASE_URL must be an absolute http(s) URL") from None
         if parsed.scheme not in {"http", "https"} or not parsed.hostname:
             raise DirectorConfigError("GROQ_API_BASE_URL must be an absolute http(s) URL")
-        if parsed.username or parsed.password or parsed.query or parsed.fragment:
+        if (
+            parsed.username is not None
+            or parsed.password is not None
+            or parsed.query
+            or parsed.fragment
+        ):
             raise DirectorConfigError(
                 "GROQ_API_BASE_URL must not contain credentials, a query or a fragment"
             )

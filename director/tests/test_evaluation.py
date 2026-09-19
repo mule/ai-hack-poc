@@ -40,7 +40,13 @@ from benchmarks.evaluation.protocol import (
     min_samples_for,
     resolve_parameters,
 )
-from benchmarks.evaluation.report import AnalysisError, analyze, load_observations, run_summarizer
+from benchmarks.evaluation.report import (
+    AnalysisError,
+    analyze,
+    compute_metrics,
+    load_observations,
+    run_summarizer,
+)
 from benchmarks.evaluation.runner import (
     EvaluationError,
     compute_offline_plan_digest,
@@ -444,6 +450,65 @@ def test_verify_rejects_a_malformed_raw_file_entry_without_a_traceback(bundle_co
     assert any("manifest sha256" in problem for problem in problems)
 
 
+def _refresh_raw_file_identity(bundle_dir: Path, name: str) -> None:
+    from benchmarks.evaluation.corpus import sha256_file
+
+    manifest_path = bundle_dir / "manifest.json"
+    manifest = json.loads(manifest_path.read_text())
+    manifest["raw_files"][name].update(
+        sha256=sha256_file(bundle_dir / name),
+        bytes=(bundle_dir / name).stat().st_size,
+    )
+    manifest_path.write_text(json.dumps(manifest))
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "expected"),
+    [
+        ("usage", "not-an-object", "usage must be an object or null"),
+        ("usage", {"input_tokens": -1}, "input_tokens must be a non-negative integer"),
+        ("provider_metadata", ["not", "an", "object"], "provider_metadata must be an object"),
+    ],
+)
+def test_verify_rejects_optional_row_shapes_that_analysis_consumes(
+    bundle_copy, field, value, expected
+):
+    results_path = bundle_copy / "results.json"
+    results = json.loads(results_path.read_text())
+    results["results"][0][field] = value
+    results_path.write_text(json.dumps(results))
+    _refresh_raw_file_identity(bundle_copy, "results.json")
+
+    problems = verify_bundle(bundle_copy)
+    assert any(expected in problem for problem in problems)
+    with pytest.raises(AnalysisError, match="not a trustworthy"):
+        analyze(bundle_copy, repo_root=REPO_ROOT)
+
+
+@pytest.mark.parametrize(
+    ("file_name", "mutate", "expected"),
+    [
+        ("protocol.json", lambda doc: doc.update(min_tail_samples="ten"), "min_tail_samples"),
+        (
+            "environment.json",
+            lambda doc: doc.update(runtime=[]),
+            "environment runtime must be an object",
+        ),
+    ],
+)
+def test_verify_rejects_malformed_analysis_documents(bundle_copy, file_name, mutate, expected):
+    path = bundle_copy / file_name
+    document = json.loads(path.read_text())
+    mutate(document)
+    path.write_text(json.dumps(document))
+    _refresh_raw_file_identity(bundle_copy, file_name)
+
+    problems = verify_bundle(bundle_copy)
+    assert any(expected in problem for problem in problems)
+    with pytest.raises(AnalysisError, match="not a trustworthy"):
+        analyze(bundle_copy, repo_root=REPO_ROOT)
+
+
 def test_verify_enforces_cross_file_identity_warmup_and_seeded_order(bundle_copy):
     protocol_path = bundle_copy / "protocol.json"
     protocol = json.loads(protocol_path.read_text())
@@ -600,6 +665,21 @@ def test_report_flags_small_samples_and_missing_prices(corpus, tmp_path):
     assert "too few for" in text and "p95" in text
     assert "no_price" in text and "home wifi" in text
     assert "billable" not in text or "Live run" in text
+
+
+def test_determinism_reports_partial_failures_as_incomplete_and_nonidentical(offline_bundle):
+    bundle = Bundle(offline_bundle)
+    request_id = bundle.results[0]["request_id"]
+    second = next(
+        row for row in bundle.results if row["request_id"] == request_id and row["iteration"] == 2
+    )
+    second.update(success=False, room=None, error_code="provider_timeout")
+
+    determinism = compute_metrics(bundle, {})["rules-baseline/builtin-v1"]["determinism"]
+    assert determinism["complete_success_coverage_rate"] < 1.0
+    assert determinism["identical_outcomes_across_iterations_rate"] < 1.0
+    assert determinism["identical_across_iterations_rate"] < 1.0
+    assert determinism["identical_successful_plans_rate"] == 1.0
 
 
 def test_summarizer_bridge_reports_absence_instead_of_reimplementing(tmp_path):

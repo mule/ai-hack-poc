@@ -372,6 +372,57 @@ def test_arg_parser_and_model_overrides():
         parse_model_overrides(["invalid_format_no_colon"])
 
 
+@pytest.mark.parametrize(
+    ("providers", "models", "iterations", "concurrency", "expected"),
+    [
+        ([RULES_PROVIDER_ID], None, 0, 1, "iterations must be a positive integer"),
+        ([RULES_PROVIDER_ID], None, 1, 0, "concurrency must be a positive integer"),
+        (
+            [RULES_PROVIDER_ID, RULES_PROVIDER_ID],
+            None,
+            1,
+            1,
+            "duplicate provider/model selection",
+        ),
+        (
+            [GROQ_PROVIDER_ID],
+            {GROQ_PROVIDER_ID: ["model-a", "model-a"]},
+            1,
+            1,
+            "duplicate provider/model selection",
+        ),
+    ],
+)
+def test_run_benchmark_rejects_invalid_definitions_before_service_construction(
+    monkeypatch, providers, models, iterations, concurrency, expected
+):
+    import benchmarks.replay as replay_module
+
+    def unexpected_service_construction(*args, **kwargs):
+        raise AssertionError("validation must run before service construction")
+
+    monkeypatch.setattr(replay_module, "build_default_service", unexpected_service_construction)
+    with pytest.raises(ValueError, match=expected):
+        asyncio.run(
+            run_benchmark(
+                [make_request()],
+                providers=providers,
+                models=models,
+                iterations=iterations,
+                concurrency=concurrency,
+            )
+        )
+
+
+def test_main_async_rejects_invalid_cardinality_even_for_an_empty_dataset(tmp_path: Path):
+    empty = tmp_path / "empty.jsonl"
+    empty.write_text("")
+    args = build_arg_parser().parse_args(["--input", str(empty), "--iterations", "0", "--quiet"])
+
+    with pytest.raises(ValueError, match="iterations must be a positive integer"):
+        asyncio.run(main_async(args))
+
+
 def test_cli_execution_with_output_files(tmp_path: Path):
     fixture_path = FIXTURES_DIR / "sample_run.jsonl"
     json_out = tmp_path / "report.json"

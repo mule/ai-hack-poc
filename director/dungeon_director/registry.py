@@ -84,7 +84,7 @@ class ProviderRegistry:
 
     def register(self, provider: DungeonDirectorProvider) -> None:
         provider_id = provider.provider_id
-        if not isinstance(provider_id, str) or not _PROVIDER_ID_RE.match(provider_id):
+        if not isinstance(provider_id, str) or not _PROVIDER_ID_RE.fullmatch(provider_id):
             raise DirectorConfigError(
                 f"invalid provider id {provider_id!r}: use lowercase letters, digits, "
                 "'_', '.' or '-' (1-64 chars, starting with a letter or digit)"
@@ -94,7 +94,7 @@ class ProviderRegistry:
         if not provider.models:
             raise DirectorConfigError(f"provider {provider_id!r} must declare at least one model")
         for model in provider.models:
-            if not _MODEL_ID_RE.match(model):
+            if not isinstance(model, str) or not _MODEL_ID_RE.fullmatch(model):
                 raise DirectorConfigError(
                     f"provider {provider_id!r} has invalid model id {model!r}"
                 )

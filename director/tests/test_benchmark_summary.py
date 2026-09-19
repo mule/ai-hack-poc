@@ -879,12 +879,13 @@ def test_sample_fixtures_json_and_jsonl_agree_and_show_every_metric_class():
 # ---------------------------------------------------------------------------
 
 
-def test_parse_model_selections_allows_several_models_for_one_provider():
+def test_parse_model_selections_allows_several_models_and_rejects_duplicates():
     assert parse_model_selections(["groq:a", "groq:b", "cerebras:c"]) == {
         "groq": ["a", "b"],
         "cerebras": ["c"],
     }
-    assert parse_model_selections(["groq:a", "groq:a"]) == {"groq": ["a"]}
+    with pytest.raises(ValueError, match="duplicate provider/model selection"):
+        parse_model_selections(["groq:a", "groq:a"])
     assert parse_model_selections(None) == {}
     with pytest.raises(ValueError, match="invalid model override format"):
         parse_model_selections(["nocolon"])

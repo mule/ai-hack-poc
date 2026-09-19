@@ -66,6 +66,41 @@ DEFAULT_MODELS: dict[str, str] = {
 }
 
 
+def _resolve_benchmark_selections(
+    providers: Sequence[str],
+    models: dict[str, str | Sequence[str]] | None,
+    *,
+    iterations: int,
+    concurrency: int,
+) -> dict[str, list[str]]:
+    """Validate one replay definition before constructing services or making calls."""
+    for name, value in (("iterations", iterations), ("concurrency", concurrency)):
+        if isinstance(value, bool) or not isinstance(value, int) or value < 1:
+            raise ValueError(f"{name} must be a positive integer")
+
+    model_map: dict[str, list[str]] = {
+        provider: [model] for provider, model in DEFAULT_MODELS.items()
+    }
+    for provider, selected in (models or {}).items():
+        model_map[provider] = [selected] if isinstance(selected, str) else list(selected)
+
+    seen: set[tuple[str, str]] = set()
+    for provider in providers:
+        for model in model_map.get(provider) or ["default"]:
+            if (
+                not isinstance(provider, str)
+                or not provider
+                or not isinstance(model, str)
+                or not model
+            ):
+                raise ValueError("provider and model selections must be non-empty strings")
+            selection = (provider, model)
+            if selection in seen:
+                raise ValueError(f"duplicate provider/model selection: {provider}/{model}")
+            seen.add(selection)
+    return model_map
+
+
 @dataclass(frozen=True, slots=True)
 class ReplayItemResult:
     """One evaluation of a generation request through the director service."""
@@ -438,17 +473,16 @@ async def run_benchmark(
     ``models`` maps a provider to one model or to several; every listed model is
     replayed and summarized separately. A provider without an entry uses its default.
     """
+    model_map = _resolve_benchmark_selections(
+        providers, models, iterations=iterations, concurrency=concurrency
+    )
     owned_registry: ProviderRegistry | None = None
     if service is None:
         service, owned_registry = build_default_service()
     reg = registry or owned_registry
 
     try:
-        model_map: dict[str, list[str]] = {prov: [mod] for prov, mod in DEFAULT_MODELS.items()}
-        for prov, selected in (models or {}).items():
-            model_map[prov] = [selected] if isinstance(selected, str) else list(selected)
-
-        semaphore = asyncio.Semaphore(concurrency if concurrency > 0 else 1)
+        semaphore = asyncio.Semaphore(concurrency)
 
         async def worker(req: GenerationRequest, prov: str, mod: str, it: int) -> ReplayItemResult:
             async with semaphore:
@@ -620,18 +654,26 @@ def parse_model_selections(model_args: list[str] | None) -> dict[str, list[str]]
         if ":" not in arg:
             raise ValueError(f"invalid model override format {arg!r}; expected 'provider:model'")
         prov, mod = (part.strip() for part in arg.split(":", 1))
-        if mod not in selections.setdefault(prov, []):
-            selections[prov].append(mod)
+        models = selections.setdefault(prov, [])
+        if mod in models:
+            raise ValueError(f"duplicate provider/model selection: {prov}/{mod}")
+        models.append(mod)
     return selections
 
 
 async def main_async(args: argparse.Namespace) -> int:
     requests = load_dataset_requests(args.input)
+    model_overrides = parse_model_selections(args.models)
+    _resolve_benchmark_selections(
+        args.providers,
+        model_overrides,
+        iterations=args.iterations,
+        concurrency=args.concurrency,
+    )
     if not requests:
         print(f"Warning: no generation requests found in {args.input}", file=sys.stderr)
         return 0
 
-    model_overrides = parse_model_selections(args.models)
     service, registry = build_default_service(timeout_seconds=args.timeout)
 
     report = await run_benchmark(
