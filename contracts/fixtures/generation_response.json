@@ -1,0 +1,33 @@
+{
+  "contract_version": "1.0.0",
+  "request_id": "req-0192-0007",
+  "run_id": "run-0192-alpha",
+  "success": true,
+  "room": {
+    "room_id": "r-004",
+    "depth": 3,
+    "room_type": "room",
+    "size": "small",
+    "danger": 2,
+    "exits": [
+      {"direction": "south", "kind": "door", "locked": false},
+      {"direction": "east", "kind": "passage", "locked": false}
+    ],
+    "enemy_density": 0.15,
+    "loot_density": 0.45,
+    "secret_probability": 0.2,
+    "has_secret": false,
+    "environmental_tags": ["dark"],
+    "description": "A dusty larder; rations may be stashed here."
+  },
+  "metadata": {
+    "provider": "rules-baseline",
+    "model": "builtin-v1",
+    "started_at": "2026-09-19T10:00:00.100Z",
+    "completed_at": "2026-09-19T10:00:00.104Z",
+    "latency_ms": 4.0,
+    "usage": {"input_tokens": 412, "output_tokens": 87, "estimated_cost_usd": 0.0},
+    "error": null,
+    "provider_metadata": {}
+  }
+}

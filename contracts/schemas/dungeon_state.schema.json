@@ -1,0 +1,354 @@
+{
+  "$defs": {
+    "ExitDirection": {
+      "enum": [
+        "north",
+        "south",
+        "east",
+        "west",
+        "up",
+        "down"
+      ],
+      "title": "ExitDirection",
+      "type": "string"
+    },
+    "HungerState": {
+      "enum": [
+        "satiated",
+        "normal",
+        "hungry",
+        "weak",
+        "starving"
+      ],
+      "title": "HungerState",
+      "type": "string"
+    },
+    "InventoryItem": {
+      "additionalProperties": false,
+      "properties": {
+        "item_id": {
+          "maxLength": 64,
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$",
+          "title": "Item Id",
+          "type": "string"
+        },
+        "quantity": {
+          "default": 1,
+          "maximum": 9999,
+          "minimum": 1,
+          "title": "Quantity",
+          "type": "integer"
+        },
+        "category": {
+          "anyOf": [
+            {
+              "maxLength": 32,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Category"
+        }
+      },
+      "required": [
+        "item_id"
+      ],
+      "title": "InventoryItem",
+      "type": "object"
+    },
+    "PacingContext": {
+      "additionalProperties": false,
+      "description": "Aggregate pacing signals; all optional so older clients stay valid.",
+      "properties": {
+        "rooms_on_depth": {
+          "default": 0,
+          "maximum": 1024,
+          "minimum": 0,
+          "title": "Rooms On Depth",
+          "type": "integer"
+        },
+        "secrets_found": {
+          "default": 0,
+          "maximum": 1024,
+          "minimum": 0,
+          "title": "Secrets Found",
+          "type": "integer"
+        },
+        "encounters_on_depth": {
+          "default": 0,
+          "maximum": 1024,
+          "minimum": 0,
+          "title": "Encounters On Depth",
+          "type": "integer"
+        },
+        "turns_on_depth": {
+          "default": 0,
+          "maximum": 1000000,
+          "minimum": 0,
+          "title": "Turns On Depth",
+          "type": "integer"
+        },
+        "average_recent_danger": {
+          "anyOf": [
+            {
+              "maximum": 5.0,
+              "minimum": 0.0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Average Recent Danger"
+        }
+      },
+      "title": "PacingContext",
+      "type": "object"
+    },
+    "PlayerState": {
+      "additionalProperties": false,
+      "properties": {
+        "hp": {
+          "maximum": 99999,
+          "minimum": 0,
+          "title": "Hp",
+          "type": "integer"
+        },
+        "max_hp": {
+          "maximum": 99999,
+          "minimum": 1,
+          "title": "Max Hp",
+          "type": "integer"
+        },
+        "level": {
+          "default": 1,
+          "maximum": 100,
+          "minimum": 1,
+          "title": "Level",
+          "type": "integer"
+        },
+        "hunger": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/HungerState"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "conditions": {
+          "default": [],
+          "items": {
+            "maxLength": 64,
+            "minLength": 1,
+            "type": "string"
+          },
+          "maxItems": 16,
+          "title": "Conditions",
+          "type": "array"
+        }
+      },
+      "required": [
+        "hp",
+        "max_hp"
+      ],
+      "title": "PlayerState",
+      "type": "object"
+    },
+    "RecentEvent": {
+      "additionalProperties": false,
+      "properties": {
+        "event": {
+          "maxLength": 128,
+          "minLength": 1,
+          "title": "Event",
+          "type": "string"
+        },
+        "turn": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Turn"
+        }
+      },
+      "required": [
+        "event"
+      ],
+      "title": "RecentEvent",
+      "type": "object"
+    },
+    "RoomType": {
+      "description": "Semantic room archetypes. Never encodes geometry.",
+      "enum": [
+        "entrance",
+        "room",
+        "corridor",
+        "cavern",
+        "chamber",
+        "vault",
+        "shrine",
+        "shop",
+        "treasure",
+        "stairs_down",
+        "stairs_up"
+      ],
+      "title": "RoomType",
+      "type": "string"
+    },
+    "UnresolvedExit": {
+      "additionalProperties": false,
+      "description": "A committed exit whose destination room is not generated yet.",
+      "properties": {
+        "room_id": {
+          "maxLength": 64,
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$",
+          "title": "Room Id",
+          "type": "string"
+        },
+        "direction": {
+          "$ref": "#/$defs/ExitDirection"
+        },
+        "since_turn": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Since Turn"
+        }
+      },
+      "required": [
+        "room_id",
+        "direction"
+      ],
+      "title": "UnresolvedExit",
+      "type": "object"
+    },
+    "VisitedRoom": {
+      "additionalProperties": false,
+      "description": "Summary of an already-committed room, for director context only.",
+      "properties": {
+        "room_id": {
+          "maxLength": 64,
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$",
+          "title": "Room Id",
+          "type": "string"
+        },
+        "room_type": {
+          "$ref": "#/$defs/RoomType"
+        },
+        "danger": {
+          "default": 1,
+          "maximum": 5,
+          "minimum": 1,
+          "title": "Danger",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "room_id",
+        "room_type"
+      ],
+      "title": "VisitedRoom",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "description": "Snapshot of committed, player-visible dungeon state (semantic only).",
+  "properties": {
+    "depth": {
+      "maximum": 128,
+      "minimum": 1,
+      "title": "Depth",
+      "type": "integer"
+    },
+    "turn": {
+      "default": 0,
+      "maximum": 10000000,
+      "minimum": 0,
+      "title": "Turn",
+      "type": "integer"
+    },
+    "player": {
+      "$ref": "#/$defs/PlayerState"
+    },
+    "recent_rooms": {
+      "default": [],
+      "items": {
+        "$ref": "#/$defs/VisitedRoom"
+      },
+      "maxItems": 32,
+      "title": "Recent Rooms",
+      "type": "array"
+    },
+    "recent_events": {
+      "default": [],
+      "items": {
+        "$ref": "#/$defs/RecentEvent"
+      },
+      "maxItems": 32,
+      "title": "Recent Events",
+      "type": "array"
+    },
+    "inventory": {
+      "default": [],
+      "items": {
+        "$ref": "#/$defs/InventoryItem"
+      },
+      "maxItems": 128,
+      "title": "Inventory",
+      "type": "array"
+    },
+    "unresolved_exits": {
+      "default": [],
+      "items": {
+        "$ref": "#/$defs/UnresolvedExit"
+      },
+      "maxItems": 64,
+      "title": "Unresolved Exits",
+      "type": "array"
+    },
+    "pacing": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/PacingContext"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    }
+  },
+  "required": [
+    "depth",
+    "player"
+  ],
+  "title": "DungeonState",
+  "type": "object",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://mule.github.io/ai-hack-poc/contracts/v1.0.0/dungeon_state.schema.json",
+  "x-contract-version": "1.0.0"
+}

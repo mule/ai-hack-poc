@@ -1,0 +1,445 @@
+{
+  "$defs": {
+    "EnvironmentalTag": {
+      "enum": [
+        "dark",
+        "flooded",
+        "fungal",
+        "icy",
+        "hot",
+        "ruined",
+        "hallowed",
+        "trapped",
+        "overgrown",
+        "noisy"
+      ],
+      "title": "EnvironmentalTag",
+      "type": "string"
+    },
+    "ErrorDetail": {
+      "additionalProperties": false,
+      "description": "Structured failure information for the documented failure path.",
+      "properties": {
+        "code": {
+          "$ref": "#/$defs/ErrorKind"
+        },
+        "message": {
+          "maxLength": 500,
+          "minLength": 1,
+          "title": "Message",
+          "type": "string"
+        },
+        "raw_excerpt": {
+          "anyOf": [
+            {
+              "maxLength": 4096,
+              "minLength": 0,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Raw Excerpt"
+        },
+        "occurred_at": {
+          "anyOf": [
+            {
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Occurred At"
+        }
+      },
+      "required": [
+        "code",
+        "message"
+      ],
+      "title": "ErrorDetail",
+      "type": "object"
+    },
+    "ErrorKind": {
+      "description": "Machine-readable failure codes for the documented failure path.",
+      "enum": [
+        "schema_violation",
+        "invalid_json",
+        "unsupported_contract_version",
+        "empty_response",
+        "provider_error",
+        "provider_timeout",
+        "rate_limited",
+        "safety_refusal",
+        "budget_exceeded",
+        "internal_error"
+      ],
+      "title": "ErrorKind",
+      "type": "string"
+    },
+    "Exit": {
+      "additionalProperties": false,
+      "properties": {
+        "direction": {
+          "$ref": "#/$defs/ExitDirection"
+        },
+        "kind": {
+          "$ref": "#/$defs/ExitKind",
+          "default": "door"
+        },
+        "locked": {
+          "default": false,
+          "title": "Locked",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "direction"
+      ],
+      "title": "Exit",
+      "type": "object"
+    },
+    "ExitDirection": {
+      "enum": [
+        "north",
+        "south",
+        "east",
+        "west",
+        "up",
+        "down"
+      ],
+      "title": "ExitDirection",
+      "type": "string"
+    },
+    "ExitKind": {
+      "enum": [
+        "door",
+        "passage",
+        "stairs",
+        "secret"
+      ],
+      "title": "ExitKind",
+      "type": "string"
+    },
+    "JsonValue": {},
+    "ResponseMetadata": {
+      "additionalProperties": false,
+      "description": "Telemetry envelope. Provider-specific blobs live in provider_metadata.\n\nAll timestamps must be timezone-aware ISO 8601 values; naive datetimes\nare a normal validation failure.",
+      "properties": {
+        "provider": {
+          "maxLength": 128,
+          "minLength": 1,
+          "title": "Provider",
+          "type": "string"
+        },
+        "model": {
+          "maxLength": 128,
+          "minLength": 1,
+          "title": "Model",
+          "type": "string"
+        },
+        "started_at": {
+          "format": "date-time",
+          "title": "Started At",
+          "type": "string"
+        },
+        "completed_at": {
+          "format": "date-time",
+          "title": "Completed At",
+          "type": "string"
+        },
+        "latency_ms": {
+          "anyOf": [
+            {
+              "minimum": 0.0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Latency Ms"
+        },
+        "usage": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/UsageStats"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "error": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ErrorDetail"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "provider_metadata": {
+          "additionalProperties": {
+            "$ref": "#/$defs/JsonValue"
+          },
+          "default": {},
+          "maxProperties": 32,
+          "title": "Provider Metadata",
+          "type": "object"
+        }
+      },
+      "required": [
+        "provider",
+        "model",
+        "started_at",
+        "completed_at"
+      ],
+      "title": "ResponseMetadata",
+      "type": "object"
+    },
+    "RoomPlan": {
+      "additionalProperties": false,
+      "description": "Semantic description of one room. Geometry is derived game-side.",
+      "properties": {
+        "room_id": {
+          "maxLength": 64,
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$",
+          "title": "Room Id",
+          "type": "string"
+        },
+        "depth": {
+          "maximum": 128,
+          "minimum": 1,
+          "title": "Depth",
+          "type": "integer"
+        },
+        "room_type": {
+          "$ref": "#/$defs/RoomType"
+        },
+        "size": {
+          "$ref": "#/$defs/RoomSize"
+        },
+        "danger": {
+          "default": 1,
+          "maximum": 5,
+          "minimum": 1,
+          "title": "Danger",
+          "type": "integer"
+        },
+        "exits": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/Exit"
+          },
+          "maxItems": 8,
+          "title": "Exits",
+          "type": "array"
+        },
+        "enemy_density": {
+          "default": 0.0,
+          "maximum": 1.0,
+          "minimum": 0.0,
+          "title": "Enemy Density",
+          "type": "number"
+        },
+        "loot_density": {
+          "default": 0.0,
+          "maximum": 1.0,
+          "minimum": 0.0,
+          "title": "Loot Density",
+          "type": "number"
+        },
+        "secret_probability": {
+          "default": 0.0,
+          "maximum": 1.0,
+          "minimum": 0.0,
+          "title": "Secret Probability",
+          "type": "number"
+        },
+        "has_secret": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Has Secret"
+        },
+        "environmental_tags": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/EnvironmentalTag"
+          },
+          "maxItems": 8,
+          "title": "Environmental Tags",
+          "type": "array"
+        },
+        "description": {
+          "anyOf": [
+            {
+              "maxLength": 200,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Description"
+        }
+      },
+      "required": [
+        "room_id",
+        "depth",
+        "room_type",
+        "size"
+      ],
+      "title": "RoomPlan",
+      "type": "object"
+    },
+    "RoomSize": {
+      "description": "Relative size class; exact tile extents are decided game-side.",
+      "enum": [
+        "tiny",
+        "small",
+        "medium",
+        "large",
+        "huge"
+      ],
+      "title": "RoomSize",
+      "type": "string"
+    },
+    "RoomType": {
+      "description": "Semantic room archetypes. Never encodes geometry.",
+      "enum": [
+        "entrance",
+        "room",
+        "corridor",
+        "cavern",
+        "chamber",
+        "vault",
+        "shrine",
+        "shop",
+        "treasure",
+        "stairs_down",
+        "stairs_up"
+      ],
+      "title": "RoomType",
+      "type": "string"
+    },
+    "UsageStats": {
+      "additionalProperties": false,
+      "properties": {
+        "input_tokens": {
+          "anyOf": [
+            {
+              "maximum": 10000000,
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Input Tokens"
+        },
+        "output_tokens": {
+          "anyOf": [
+            {
+              "maximum": 10000000,
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Output Tokens"
+        },
+        "estimated_cost_usd": {
+          "anyOf": [
+            {
+              "minimum": 0.0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Estimated Cost Usd"
+        }
+      },
+      "title": "UsageStats",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "description": "Director -> game: one semantic room decision plus telemetry.",
+  "properties": {
+    "contract_version": {
+      "title": "Contract Version",
+      "type": "string"
+    },
+    "request_id": {
+      "maxLength": 64,
+      "minLength": 1,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$",
+      "title": "Request Id",
+      "type": "string"
+    },
+    "run_id": {
+      "maxLength": 64,
+      "minLength": 1,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$",
+      "title": "Run Id",
+      "type": "string"
+    },
+    "success": {
+      "default": true,
+      "title": "Success",
+      "type": "boolean"
+    },
+    "room": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/RoomPlan"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "metadata": {
+      "$ref": "#/$defs/ResponseMetadata"
+    }
+  },
+  "required": [
+    "contract_version",
+    "request_id",
+    "run_id",
+    "metadata"
+  ],
+  "title": "GenerationResponse",
+  "type": "object",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://mule.github.io/ai-hack-poc/contracts/v1.0.0/generation_response.schema.json",
+  "x-contract-version": "1.0.0"
+}
