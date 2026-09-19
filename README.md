@@ -16,7 +16,7 @@ Early bootstrap. What exists today and what does not:
 | Component | Directory | State |
 |-----------|-----------|-------|
 | Godot 2D client (desktop + Android) | `game/` | Shell delivered by issue #4, developed alongside this one. Not part of the bootstrap files. |
-| Director service (FastAPI) | `director/` | Runs, exposes `GET /health` only. No dungeon endpoint, no providers yet. |
+| Director service (FastAPI) | `director/` | Issue #5: `POST /v1/generate`, `GET /v1/config`, `GET /health`; provider registry; offline rules baseline as default. No external providers yet. |
 | Shared plan contract (`RoomPlan`) | `director/dungeon_director/contracts.py` | Owned by issue #3. |
 | Benchmarks / replay | `benchmarks/` | Placeholder README only. |
 | Observability | `observability/` | Placeholder README only. |
@@ -43,8 +43,8 @@ Early bootstrap. What exists today and what does not:
                                                       └─────────────────────┘
 ```
 
-(The providers shown are the planned initial set from the epic; none are
-implemented yet.)
+(The providers shown are the planned initial set from the epic; only the rules
+baseline is implemented. The others plug in through the same provider interface.)
 
 ### Provider-independent, semantic plans
 
@@ -92,6 +92,8 @@ make setup           # creates director/.venv and installs the director + dev to
 make run-director    # http://127.0.0.1:8000, auto-reload
 curl http://127.0.0.1:8000/health
 # {"status":"ok","service":"dungeon-director"}
+curl http://127.0.0.1:8000/v1/generate -H 'content-type: application/json' \
+     -d @contracts/fixtures/generation_request.json      # a rules-baseline RoomPlan
 ```
 
 Equivalent without `make` (from the repo root, with the venv active):
@@ -102,6 +104,70 @@ python -m uvicorn dungeon_director.app:app --app-dir director
 
 Override host/port with make variables: `make run-director DIRECTOR_PORT=9000`.
 Interactive API docs are served at `/docs` while the director runs.
+
+### Director API
+
+| Endpoint | Purpose |
+|----------|---------|
+| `GET /health` | Liveness: `{"status":"ok","service":"dungeon-director"}` |
+| `GET /v1/config` | Default provider/model and every registered provider with its models and an `available` flag. Identifiers only, never credentials |
+| `POST /v1/generate` | Body: the canonical `GenerationRequest`. Optional `?provider=<id>&model=<id>` (defaults come from configuration). Returns a canonical `GenerationResponse` |
+
+Provider/model selection is a query parameter so the shared contract is
+untouched. **Every** `/v1/generate` answer, including failures, is a
+`GenerationResponse`; the game checks `success`, and the HTTP status tells you why:
+
+| Status | Meaning | `metadata.error.code` |
+|--------|---------|-----------------------|
+| 200 | Valid `RoomPlan` in `room` | none |
+| 404 | Unknown provider or model | `provider_error` (`provider_metadata.selection_error` names the reason) |
+| 422 | Request failed contract validation | `schema_violation`, `invalid_json`, `unsupported_contract_version` |
+| 429 | Provider rate limited or over budget | `rate_limited`, `budget_exceeded` |
+| 500 | Director-side failure while processing a provider result, or a provider-reported internal error | `internal_error` |
+| 502 | Provider raised, or returned empty/invalid/wrong-depth output | `provider_error`, `schema_violation`, `invalid_json`, `empty_response`, `safety_refusal` |
+| 503 | Provider registered but unavailable | `provider_error` (`selection_error: provider_unavailable`) |
+| 504 | Provider exceeded the timeout, or reported a timeout of its own | `provider_timeout` (`provider_metadata.timeout_origin`: `director_deadline` or `provider`) |
+
+Behaviour that applies to every provider:
+
+- **No retries.** One request is one provider call, so latencies are honest.
+- **Timeout.** One configurable deadline. A provider that overruns it is
+  cancelled and reported as `provider_timeout`. A provider that returns *after*
+  the deadline (it swallowed the cancellation, or blocked the event loop) is
+  also a timeout, never a 200. A `TimeoutError` raised by the provider itself is
+  a `provider_timeout` too, labelled `timeout_origin: provider`.
+- **Cancellation.** If the task running the request is cancelled (for example
+  the ASGI server cancels it), the cancellation propagates into the provider
+  call. The director does not itself monitor for client disconnects.
+- **Providers must be truly async.** A provider must not block the event loop
+  (`time.sleep`, a synchronous HTTP client) and must not swallow
+  `CancelledError`. A blocking call cannot be interrupted here: it stalls every
+  other request while it runs, and its late answer is only discarded afterwards.
+- **Results are validated, not trusted.** The result object must be a
+  `ProviderResult`, and the room is validated against the contract even when
+  the provider returns a ready `RoomPlan` instance (which could have been built
+  unchecked or mutated). Anything else is a canonical 502.
+- **Untrusted text.** For failures a provider reports itself, the game gets only
+  a stable generic message for the error code, never the provider's own message
+  or excerpt (these can echo credentials). Validation excerpts of malformed room
+  output, which the director generates, are still returned.
+- **Logs.** Unexpected provider exceptions are logged as provider, model and
+  exception *type* only: no exception text, no traceback, no adapter-supplied
+  message.
+- **Availability.** A provider whose availability check throws is treated as
+  unavailable (`available: false`, 503 on selection).
+- **Selectors.** Blank or whitespace-only `provider`/`model` query values count
+  as omitted (defaults apply); surrounding whitespace is trimmed.
+- **Isolation.** One provider failing never affects the next request.
+
+The rules baseline (`rules-baseline` / `builtin-v1`) is offline and
+deterministic: the same state and frontier always yield the same room, its
+depth equals the request depth, and it always has an exit back to the frontier
+it was generated from.
+
+Adding a provider means subclassing `DungeonDirectorProvider`
+(`director/dungeon_director/providers.py`) and registering it in
+`default_registry()`; nothing in the game changes.
 
 ### Running the game
 
@@ -152,19 +218,28 @@ load; its contents belong to the game shell.
   files are git-ignored; only `.env.example` is tracked.
 - Provider credentials belong to the **director only**. Never put them in
   `game/`, in exported builds, or in committed files.
-- `.env.example` currently lists placeholder names for anticipated settings
-  (active provider, Cloudflare/Groq/Cerebras credentials, OTLP endpoint). The
-  director does not read any of them yet; config loading arrives with the
-  provider work, and names may change then.
-- Provider and model selection is meant to be configuration-driven, not
-  hard-coded in game code.
+- The director reads `DIRECTOR_DEFAULT_PROVIDER` (default `rules-baseline`),
+  `DIRECTOR_DEFAULT_MODEL` (default: the provider's own default) and
+  `DIRECTOR_TIMEOUT_SECONDS` (default `10`, must be > 0 and <= 300) from the
+  **process environment**. It does not load `.env` itself: export the variables
+  or use your shell or a tool such as `direnv`. Invalid values, or a default
+  provider that is unknown or unavailable, stop the service at startup with a
+  clear message.
+- The provider credential and OTLP variables in `.env.example` are placeholders
+  for the external-provider and telemetry issues; nothing reads them yet. When
+  they do, credentials stay inside the provider adapter and never appear in
+  `/v1/config`, responses or error messages.
+- Provider and model selection is configuration-driven: the game names a
+  provider/model by stable id in the query string, never provider-specific logic.
 
 ## Repository layout
 
 ```
 game/           Godot 2D client (issue #4)
 director/       FastAPI director service
-  dungeon_director/   Python package (app.py, contracts.py, ...)
+  dungeon_director/   Python package: app.py (HTTP + app factory), service.py
+                      (timeout/validation/failure policy), providers.py,
+                      registry.py, rules.py (baseline), settings.py, contracts.py
   tests/
 benchmarks/     Replay/benchmark tooling (placeholder)
 observability/  OpenTelemetry/OpenLIT config (placeholder)
