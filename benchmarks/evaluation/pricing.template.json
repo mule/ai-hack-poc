@@ -1,0 +1,44 @@
+{
+  "schema_version": "1.0.0",
+  "currency": "USD",
+  "about": "TEMPLATE. Hosted prices are deliberately null: copy this file to benchmarks/evaluation/pricing.local.json (git-ignored), fill in the prices for YOUR plan, and cite the page and the date you read it. An entry with any price but no source/retrieved_on is rejected. Pass it with --pricing.",
+  "prices": [
+    {
+      "provider": "rules-baseline",
+      "model": "builtin-v1",
+      "input_usd_per_1m_tokens": 0,
+      "output_usd_per_1m_tokens": 0,
+      "per_request_usd": 0,
+      "source": "offline deterministic provider: nothing is billed",
+      "retrieved_on": "2026-09-19"
+    },
+    {
+      "provider": "cloudflare-jev",
+      "model": "typesafe/jev",
+      "input_usd_per_1m_tokens": null,
+      "output_usd_per_1m_tokens": null,
+      "per_request_usd": null,
+      "source": null,
+      "retrieved_on": null,
+      "notes": "Cloudflare bills Workers AI in its own units; convert and say how in this note."
+    },
+    {
+      "provider": "groq",
+      "model": "openai/gpt-oss-20b",
+      "input_usd_per_1m_tokens": null,
+      "output_usd_per_1m_tokens": null,
+      "per_request_usd": null,
+      "source": null,
+      "retrieved_on": null
+    },
+    {
+      "provider": "cerebras",
+      "model": "qwen-3.8-27b",
+      "input_usd_per_1m_tokens": null,
+      "output_usd_per_1m_tokens": null,
+      "per_request_usd": null,
+      "source": null,
+      "retrieved_on": null
+    }
+  ]
+}

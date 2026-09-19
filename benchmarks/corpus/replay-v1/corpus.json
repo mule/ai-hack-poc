@@ -1,0 +1,46 @@
+{
+  "contract_version": "1.0.0",
+  "corpus_id": "replay-v1",
+  "description": "Fixed replay corpus: every generation request of a deterministic headless simulation (5 runs, seed 100). Offline; safe to commit.",
+  "expected_offline": {
+    "rules-baseline/builtin-v1": {
+      "definition": "sha256 of the canonical decisions of iteration 1, sorted by request_id (benchmarks.evaluation.bundle.plan_digest)",
+      "plan_digest": "60fa32f73ec1b5c6c6613ae7bd9209e368e050fa9bf6012b6ac1840b1d2a9fec"
+    }
+  },
+  "files": [
+    {
+      "bytes": 215858,
+      "path": "requests.jsonl",
+      "records": 150,
+      "sha256": "83ed92ff96f8b02c62d3fe2b52a2d288a5576d439df3714372beb218a868e863"
+    }
+  ],
+  "kind": "replay",
+  "provenance": {
+    "generator": "make eval-corpus-build (game/simulation, rules transport)",
+    "godot_version": "4.7.1.stable.official.a13da4feb",
+    "recorded_outcomes": {
+      "committed": 136,
+      "sealed": 14
+    },
+    "recorded_providers": {
+      "rules-baseline/builtin-v1": 150
+    },
+    "simulation_args": "--runs 5 --steps 30 --seed 100"
+  },
+  "schema_version": "1.0.0",
+  "stats": {
+    "depths": {
+      "1": 150
+    },
+    "requests_per_run": {
+      "sim-100": 30,
+      "sim-101": 30,
+      "sim-102": 30,
+      "sim-103": 30,
+      "sim-104": 30
+    },
+    "runs": 5
+  }
+}

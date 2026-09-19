@@ -41,7 +41,23 @@ BENCH_REPORT ?= benchmarks/fixtures/sample_replay_results.json
 BENCH_FORMAT ?= text
 BENCH_OUT    ?=
 
-.PHONY: help need-venv setup run-director test lint format check replay-benchmark benchmark-summary godot-check godot-test godot-lint simulate export-linux export-android clean
+# POC evaluation protocol (issue #18); see docs/evaluation-methodology.md.
+# Output is generated evidence in the git-ignored evaluation-output/. The report
+# gets its latency/reliability/token tables from the issue #15 summarizer
+# (`make benchmark-summary`), run on the bundle's own results.json.
+EVAL_CORPUS     ?= benchmarks/corpus/replay-v1/corpus.json
+EVAL_TIER       ?= full
+EVAL_OUT        ?=
+EVAL_ARGS       ?=
+EVAL_SELECT     ?=
+EVAL_LIVE       ?= 0
+EVAL_LIVE_TIER  ?= standard
+EVAL_BUNDLE     ?=
+EVAL_SIM_ARGS   := --runs 5 --steps 30 --seed 100
+EVAL_CORPUS_OUT ?= $(CURDIR)/evaluation-output/corpus-rebuild
+EVAL_SCRATCH    := $(CURDIR)/evaluation-output/corpus-scratch
+
+.PHONY: eval-corpus-verify eval-corpus-build eval-corpus-rebuild eval-offline eval-live eval-report eval-verify help need-venv setup run-director test lint format check replay-benchmark benchmark-summary godot-check godot-test godot-lint simulate export-linux export-android clean
 
 help: ## List available targets
 	@grep -E '^[a-z-]+:.*## ' $(MAKEFILE_LIST) | awk -F':.*## ' '{printf "  %-14s %s\n", $$1, $$2}'
@@ -141,6 +157,45 @@ godot-test: ## Run Godot tests headlessly (mechanics plus optional contract, gen
 simulate: ## Headless dungeon simulation: offline rules baseline, 5 runs x 100 steps. SIM_ARGS='...' SIM_OUT=dir
 	@test -f game/simulation/run_simulation.gd || { echo "game/simulation/run_simulation.gd not found"; exit 1; }
 	@$(call godot_run,-s res://simulation/run_simulation.gd -- --out "$(SIM_OUT)" $(SIM_ARGS),$(GODOT_LOG_DIR)/godot-simulation.log,SIMULATION COMPLETE)
+
+eval-corpus-verify: need-venv ## Check the fixed replay corpus against its checksummed manifest (offline)
+	@$(VENV_BIN)/python -m benchmarks.evaluation corpus verify --corpus $(EVAL_CORPUS)
+
+eval-corpus-build: need-venv ## Regenerate the replay corpus with Godot into EVAL_CORPUS_OUT (scratch by default)
+	@command -v $(GODOT) >/dev/null || { echo "godot not found: needed to regenerate the corpus"; exit 1; }
+	@rm -rf "$(EVAL_CORPUS_OUT)" "$(EVAL_SCRATCH)"
+	@mkdir -p "$(EVAL_SCRATCH)"
+	@DUNGEON_GENERATION_LOG_PATH="$(EVAL_SCRATCH)/recording.jsonl" $(MAKE) --no-print-directory simulate \
+		SIM_OUT="$(EVAL_SCRATCH)/simulation" SIM_ARGS="$(EVAL_SIM_ARGS)" >/dev/null
+	@$(VENV_BIN)/python -m benchmarks.evaluation corpus build \
+		--from-recording "$(EVAL_SCRATCH)/recording.jsonl" --out "$(EVAL_CORPUS_OUT)" \
+		--id replay-v1 --kind replay --stamp-offline-expected \
+		--description "Fixed replay corpus: every generation request of a deterministic headless simulation (5 runs, seed 100). Offline; safe to commit." \
+		--provenance generator="make eval-corpus-build (game/simulation, rules transport)" \
+		--provenance simulation_args="$(EVAL_SIM_ARGS)" \
+		--provenance godot_version="$$($(GODOT) --version)"
+
+eval-corpus-rebuild: eval-corpus-build ## Prove the committed corpus reproduces: rebuild with Godot and compare bytes
+	@cmp $(dir $(EVAL_CORPUS))requests.jsonl "$(EVAL_CORPUS_OUT)/requests.jsonl" \
+		&& echo "corpus reproduces: rebuilt requests.jsonl is byte-identical to $(dir $(EVAL_CORPUS))requests.jsonl"
+
+eval-offline: eval-corpus-verify ## Offline fixed-corpus protocol on rules-baseline (no credentials). EVAL_TIER= EVAL_OUT=dir
+	@$(VENV_BIN)/python -m benchmarks.evaluation run --corpus $(EVAL_CORPUS) --tier $(EVAL_TIER) \
+		--select rules-baseline --label offline-reproduction $(if $(EVAL_OUT),--out $(EVAL_OUT)) $(EVAL_ARGS)
+
+eval-live: need-venv ## LIVE, BILLABLE: compare hosted providers. Needs EVAL_LIVE=1 EVAL_SELECT='groq cerebras'
+	@test "$(EVAL_LIVE)" = "1" || { echo "refusing: this makes billable calls to hosted providers. Re-run with EVAL_LIVE=1 EVAL_SELECT='groq cerebras' (credentials in the environment)"; exit 1; }
+	@test -n "$(EVAL_SELECT)" || { echo "EVAL_SELECT is empty: name providers, e.g. EVAL_SELECT='groq cerebras:qwen-3.8-27b'"; exit 1; }
+	@$(VENV_BIN)/python -m benchmarks.evaluation run --live --corpus $(EVAL_CORPUS) --tier $(EVAL_LIVE_TIER) \
+		--select $(EVAL_SELECT) $(if $(EVAL_OUT),--out $(EVAL_OUT)) $(EVAL_ARGS)
+
+eval-report: need-venv ## Re-derive report.md of a bundle (EVAL_BUNDLE=dir, optional EVAL_ARGS='--pricing f --observations f')
+	@test -n "$(EVAL_BUNDLE)" || { echo "set EVAL_BUNDLE=<bundle directory>"; exit 1; }
+	@$(VENV_BIN)/python -m benchmarks.evaluation report "$(EVAL_BUNDLE)" $(EVAL_ARGS)
+
+eval-verify: need-venv ## Verify an evidence bundle: file digests, corpus coverage, offline reproduction
+	@test -n "$(EVAL_BUNDLE)" || { echo "set EVAL_BUNDLE=<bundle directory>"; exit 1; }
+	@$(VENV_BIN)/python -m benchmarks.evaluation verify "$(EVAL_BUNDLE)"
 
 godot-lint: ## Lint GDScript with gdlint (pip install gdtoolkit)
 	@command -v gdlint >/dev/null || { echo "gdlint not found: pip install gdtoolkit"; exit 1; }

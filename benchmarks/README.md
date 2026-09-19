@@ -7,6 +7,13 @@ simulation harness from issue #16 is documented in
 
 Delivered by issues #14 (replay) and #15 (provider/model summaries) under epic #1.
 
+The comparison protocol built on these tools (a fixed replay corpus, a paired run
+design, version/config capture, cost normalization, and a report that keeps
+measured results apart from subjective notes) is defined in
+[`../docs/evaluation-methodology.md`](../docs/evaluation-methodology.md) and runs
+with `make eval-offline`. Its evidence bundles hold a `results.json` in the raw
+replay shape, so `benchmarks.summarize` reads them directly.
+
 ## Architecture & Guarantees
 
 - **Director-native evaluation:** Benchmarks evaluate requests strictly through `DirectorService.generate()`. They never call provider endpoints directly, ensuring that identical contract validation (`RoomPlan`), timeouts, error classification, and adapter logic are applied.
@@ -218,3 +225,6 @@ Groq models, timeouts, a schema failure, and partial or missing usage).
 - `make check`: Runs ruff linting and the format check over `director/` and `benchmarks/`, plus the pytest suite (replay and summary tests included).
 - `make format`: Auto-fixes and formats `director/` and `benchmarks/`.
 - `make godot-test`: Runs headlessly all Godot test suites (including `GenerationRecorder` tests).
+- `make eval-corpus-verify`, `make eval-corpus-rebuild`: check the fixed replay corpus against its manifest, or regenerate it with Godot and compare bytes (issue #18).
+- `make eval-offline`: run the evaluation protocol on the offline rules baseline and write a verified evidence bundle under the git-ignored `evaluation-output/`.
+- `make eval-live` (billable, needs `EVAL_LIVE=1`), `make eval-report`, `make eval-verify`: see [`../docs/evaluation-methodology.md`](../docs/evaluation-methodology.md).

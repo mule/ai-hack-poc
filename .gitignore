@@ -33,6 +33,13 @@ builds/
 # benchmarks/simulation/fixtures/ and stay tracked.
 simulation-output/
 
+# Generated evaluation evidence bundles and local (unsourced-by-default) inputs
+# (issue #18). The fixed replay corpus in benchmarks/corpus/replay-v1/ stays tracked.
+evaluation-output/
+benchmarks/corpus/live/
+benchmarks/evaluation/pricing.local.json
+benchmarks/evaluation/observations.local.json
+
 # Editors / OS
 .vscode/
 .idea/
