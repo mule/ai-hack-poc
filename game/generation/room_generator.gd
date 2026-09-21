@@ -250,40 +250,74 @@ static func _carve_archetype(room: GeneratedRoom, room_type: String, rng: Random
 			room.tiles[Vector2i(x, y)] = GeneratedRoom.TileType.WALL
 
 	match room_type:
+		"room":
+			_carve_standard_room(room, rng)
 		"corridor":
 			_carve_corridor_archetype(room, rng)
 		"cavern":
 			_carve_cavern_archetype(room, rng)
-		"vault", "shrine", "treasure", "shop":
-			_carve_pillared_room_archetype(room, rng, room_type)
+		"chamber":
+			_carve_chamber_archetype(room)
+		"vault":
+			_carve_vault_archetype(room)
+		"shrine":
+			_carve_shrine_archetype(room)
+		"treasure":
+			_carve_treasure_archetype(room)
+		"shop":
+			_carve_shop_archetype(room, rng)
 		"entrance":
-			_carve_entrance_archetype(room, rng)
+			_carve_entrance_archetype(room)
 		"stairs_down", "stairs_up":
-			_carve_stairs_archetype(room, rng, room_type)
-		_: # "room", "chamber"
+			_carve_stairs_archetype(room, room_type)
+		_:
 			_carve_standard_room(room, rng)
 
 
 static func _carve_standard_room(room: GeneratedRoom, rng: RandomNumberGenerator) -> void:
-	# Simple box interior: (1, 1) to (w-2, h-2)
+	# Plain rooms retain a broad usable interior, but clipped corners keep even
+	# tiny/small rooms from presenting as the same featureless rectangle.
+	_carve_chamfered_interior(room, 1 if room.width <= 9 else 2)
+	var mid_x := room.width / 2
+	var mid_y := room.height / 2
+	match rng.randi_range(0, 2):
+		1:
+			# Opposed wall niches make one seed read differently from the next.
+			room.tiles[Vector2i(2, mid_y - 1)] = GeneratedRoom.TileType.WALL
+			room.tiles[Vector2i(room.width - 3, mid_y + 1)] = GeneratedRoom.TileType.WALL
+		2:
+			# A diagonal pillar pair leaves every side connected through the center.
+			room.tiles[Vector2i(mid_x - 1, mid_y - 1)] = GeneratedRoom.TileType.WALL
+			room.tiles[Vector2i(mid_x + 1, mid_y + 1)] = GeneratedRoom.TileType.WALL
+
+
+static func _fill_interior(room: GeneratedRoom) -> void:
 	for y in range(1, room.height - 1):
 		for x in range(1, room.width - 1):
 			room.tiles[Vector2i(x, y)] = GeneratedRoom.TileType.FLOOR
 
-	# For medium or larger rooms, optionally add 1-2 small interior wall obstacles or pillars
-	if room.width >= 13 and room.height >= 11:
-		var mid_x := room.width / 2
-		var mid_y := room.height / 2
-		# 4-corner symmetry pillars if large enough
-		if room.width >= 17 and rng.randf() > 0.4:
-			var px1 := mid_x - 3
-			var px2 := mid_x + 3
-			var py1 := mid_y - 2
-			var py2 := mid_y + 2
-			room.tiles[Vector2i(px1, py1)] = GeneratedRoom.TileType.WALL
-			room.tiles[Vector2i(px2, py1)] = GeneratedRoom.TileType.WALL
-			room.tiles[Vector2i(px1, py2)] = GeneratedRoom.TileType.WALL
-			room.tiles[Vector2i(px2, py2)] = GeneratedRoom.TileType.WALL
+
+static func _carve_chamfered_interior(room: GeneratedRoom, depth: int) -> void:
+	_fill_interior(room)
+	for y in range(1, depth + 1):
+		for x in range(1, depth + 1):
+			if x + y > depth + 1:
+				continue
+			room.tiles[Vector2i(x, y)] = GeneratedRoom.TileType.WALL
+			room.tiles[Vector2i(room.width - 1 - x, y)] = GeneratedRoom.TileType.WALL
+			room.tiles[Vector2i(x, room.height - 1 - y)] = GeneratedRoom.TileType.WALL
+			room.tiles[Vector2i(room.width - 1 - x, room.height - 1 - y)] = GeneratedRoom.TileType.WALL
+
+
+static func _carve_chamber_archetype(room: GeneratedRoom) -> void:
+	# Worked chambers are cruciform halls with broad central sight lines.
+	var mid_x := room.width / 2
+	var mid_y := room.height / 2
+	var half_band := 1 if mini(room.width, room.height) <= 9 else 2
+	for y in range(1, room.height - 1):
+		for x in range(1, room.width - 1):
+			if absi(x - mid_x) <= half_band or absi(y - mid_y) <= half_band:
+				room.tiles[Vector2i(x, y)] = GeneratedRoom.TileType.FLOOR
 
 
 static func _carve_corridor_archetype(room: GeneratedRoom, rng: RandomNumberGenerator) -> void:
@@ -331,38 +365,79 @@ static func _carve_cavern_archetype(room: GeneratedRoom, rng: RandomNumberGenera
 		room.tiles[Vector2i(mid_x, y)] = GeneratedRoom.TileType.FLOOR
 
 
-static func _carve_pillared_room_archetype(room: GeneratedRoom, rng: RandomNumberGenerator, room_type: String) -> void:
-	for y in range(1, room.height - 1):
-		for x in range(1, room.width - 1):
-			room.tiles[Vector2i(x, y)] = GeneratedRoom.TileType.FLOOR
-
+static func _carve_vault_archetype(room: GeneratedRoom) -> void:
+	# A protected inner rectangle reached through four narrow approaches.
 	var mid_x := room.width / 2
 	var mid_y := room.height / 2
-
-	if room_type == "shrine" or room_type == "vault":
-		# Central dais or altar
-		if room.width >= 9 and room.height >= 9:
-			# Pillars surrounding the center
-			for dx in [-2, 2]:
-				for dy in [-2, 2]:
-					var pos := Vector2i(mid_x + dx, mid_y + dy)
-					if pos.x > 1 and pos.x < room.width - 2 and pos.y > 1 and pos.y < room.height - 2:
-						room.tiles[pos] = GeneratedRoom.TileType.WALL
-
-
-static func _carve_entrance_archetype(room: GeneratedRoom, rng: RandomNumberGenerator) -> void:
-	# Entrance room is spacious and welcoming
-	for y in range(1, room.height - 1):
-		for x in range(1, room.width - 1):
+	for y in range(2, room.height - 2):
+		for x in range(2, room.width - 2):
 			room.tiles[Vector2i(x, y)] = GeneratedRoom.TileType.FLOOR
-
-
-static func _carve_stairs_archetype(room: GeneratedRoom, rng: RandomNumberGenerator, room_type: String) -> void:
+	for x in range(1, room.width - 1):
+		room.tiles[Vector2i(x, mid_y)] = GeneratedRoom.TileType.FLOOR
 	for y in range(1, room.height - 1):
-		for x in range(1, room.width - 1):
-			room.tiles[Vector2i(x, y)] = GeneratedRoom.TileType.FLOOR
+		room.tiles[Vector2i(mid_x, y)] = GeneratedRoom.TileType.FLOOR
+
+
+static func _carve_shrine_archetype(room: GeneratedRoom) -> void:
+	# A diamond sanctuary with four stones framing its open altar.
 	var mid_x := room.width / 2
 	var mid_y := room.height / 2
+	var radius_x := maxf(1.0, float(room.width - 3) / 2.0)
+	var radius_y := maxf(1.0, float(room.height - 3) / 2.0)
+	for y in range(1, room.height - 1):
+		for x in range(1, room.width - 1):
+			var diamond_distance := absf(float(x - mid_x)) / radius_x + absf(float(y - mid_y)) / radius_y
+			if diamond_distance <= 1.05:
+				room.tiles[Vector2i(x, y)] = GeneratedRoom.TileType.FLOOR
+	for dx in [-1, 1]:
+		for dy in [-1, 1]:
+			room.tiles[Vector2i(mid_x + dx, mid_y + dy)] = GeneratedRoom.TileType.WALL
+
+
+static func _carve_treasure_archetype(room: GeneratedRoom) -> void:
+	# An octagonal trove with staggered inner guards around the centre.
+	_carve_chamfered_interior(room, 1 if room.width <= 9 else 2)
+	var mid_x := room.width / 2
+	var mid_y := room.height / 2
+	var pillar_offsets: Array[Vector2i] = [
+		Vector2i(-2, -1), Vector2i(2, -1), Vector2i(-2, 1), Vector2i(2, 1)
+	]
+	for offset: Vector2i in pillar_offsets:
+		var pos: Vector2i = Vector2i(mid_x, mid_y) + offset
+		if pos.x > 1 and pos.x < room.width - 2 and pos.y > 1 and pos.y < room.height - 2:
+			room.tiles[pos] = GeneratedRoom.TileType.WALL
+
+
+static func _carve_shop_archetype(room: GeneratedRoom, rng: RandomNumberGenerator) -> void:
+	# Shops use an L-shaped footprint. Mirroring the long aisle by seed gives
+	# repeat visits variation while keeping the counter area obvious.
+	var mid_y := room.height / 2
+	var aisle_on_left := rng.randi_range(0, 1) == 0
+	for y in range(1, room.height - 1):
+		for x in range(1, room.width - 1):
+			var in_top_room := y <= mid_y
+			var in_aisle := x <= room.width / 2 if aisle_on_left else x >= room.width / 2
+			if in_top_room or in_aisle:
+				room.tiles[Vector2i(x, y)] = GeneratedRoom.TileType.FLOOR
+
+
+static func _carve_entrance_archetype(room: GeneratedRoom) -> void:
+	# Entrance room is spacious, with clipped corners marking it as a hall.
+	_carve_chamfered_interior(room, 2 if room.width >= 9 else 1)
+
+
+static func _carve_stairs_archetype(room: GeneratedRoom, room_type: String) -> void:
+	# Round stair landings contrast with both the diamond shrine and box rooms.
+	var mid_x := room.width / 2
+	var mid_y := room.height / 2
+	var rx := maxf(1.0, float(room.width - 3) / 2.0)
+	var ry := maxf(1.0, float(room.height - 3) / 2.0)
+	for y in range(1, room.height - 1):
+		for x in range(1, room.width - 1):
+			var dx := float(x - mid_x) / rx
+			var dy := float(y - mid_y) / ry
+			if dx * dx + dy * dy <= 1.0:
+				room.tiles[Vector2i(x, y)] = GeneratedRoom.TileType.FLOOR
 	var stair_tile := GeneratedRoom.TileType.STAIRS_DOWN if room_type == "stairs_down" else GeneratedRoom.TileType.STAIRS_UP
 	room.tiles[Vector2i(mid_x, mid_y)] = stair_tile
 

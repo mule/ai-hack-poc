@@ -313,10 +313,9 @@ _TAG_STATEMENTS: dict[EnvironmentalTag, str] = {
     EnvironmentalTag.OVERGROWN: "Roots and strange plants overgrow this room.",
     EnvironmentalTag.NOISY: "This room drones with unsettling noise.",
 }
-#: Tag pairs that cannot coexist in one room (mirrors the rules baseline).
-_TAG_CONTRADICTIONS = {
-    EnvironmentalTag.ICY: EnvironmentalTag.HOT,
-    EnvironmentalTag.HOT: EnvironmentalTag.ICY,
+_ATMOSPHERE_CRITERIA = {
+    "none": "No single environmental motif should dominate this room.",
+    **{tag.value: statement for tag, statement in _TAG_STATEMENTS.items()},
 }
 
 #: Pacing gates for which room types are even offered (mirrors the rules
@@ -464,15 +463,16 @@ def build_jev_questions(request: GenerationRequest) -> dict[str, JsonValue]:
             ),
             "criteria": dict(_EXIT_COUNT_CRITERIA),
         },
-    }
-    for tag, statement in _TAG_STATEMENTS.items():
-        questions[f"tag_{tag.value}"] = {
-            "type": "noul",
+        "atmosphere": {
+            "type": "choice",
             "instructions": (
-                f"The new room fits this description: {statement} Judge it against "
-                "`state.recent_rooms` and `state.depth` for variety."
+                "Which single environmental motif best gives this room a distinct identity? "
+                "Prefer `none` when no motif strongly fits; use `state.recent_rooms` and "
+                "`state.depth` to avoid repetition."
             ),
-        }
+            "criteria": dict(_ATMOSPHERE_CRITERIA),
+        },
+    }
     return questions
 
 
@@ -582,6 +582,38 @@ def _noul_answer(answers: Mapping[str, Any], key: str) -> float:
     return _unit_number(answer["noul"], f"{key}.noul")
 
 
+def _sample_complete_choice(
+    request: GenerationRequest,
+    key: str,
+    provider_choice: str,
+    probabilities: Mapping[str, float],
+    ordered_options: list[str],
+) -> str:
+    """Draw reproducibly from a complete calibrated Choice distribution.
+
+    Some canned/older responses contain only the most likely probabilities.
+    Those keep the provider's explicit choice. Current Jev responses include
+    every offered option and sum to one; sampling that distribution stops a
+    modest plurality from becoming the same room on every request while the
+    request identity keeps replay output stable.
+    """
+    if set(probabilities) != set(ordered_options):
+        return provider_choice
+    total = sum(probabilities[option] for option in ordered_options)
+    if not math.isclose(total, 1.0, rel_tol=0.0, abs_tol=0.01):
+        return provider_choice
+
+    identity = f"{request.run_id}:{request.request_id}:{key}".encode()
+    unit = int.from_bytes(hashlib.sha256(identity).digest()[:8], "big") / float(1 << 64)
+    point = unit * total
+    cumulative = 0.0
+    for option in ordered_options:
+        cumulative += probabilities[option]
+        if point < cumulative:
+            return option
+    return ordered_options[-1]
+
+
 def compose_jev_room(
     request: GenerationRequest, answers: Mapping[str, Any], model: str
 ) -> tuple[RoomPlan, dict[str, JsonValue]]:
@@ -589,16 +621,21 @@ def compose_jev_room(
     options = request.options
     allow_secrets = options.allow_secrets if options else True
 
-    eligible = {room_type.value for room_type in _eligible_room_types(request)}
+    eligible = [room_type.value for room_type in _eligible_room_types(request)]
     room_type_choice, room_type_confidence, room_type_probabilities = _choice_answer(
         answers, "room_type", eligible
     )
-    room_type = RoomType(room_type_choice)  # membership already validated
-
-    size_choice, size_confidence, size_probabilities = _choice_answer(
-        answers, "size", {size.value for size in RoomSize}
+    sampled_room_type = _sample_complete_choice(
+        request, "room_type", room_type_choice, room_type_probabilities, eligible
     )
-    size = RoomSize(size_choice)
+    room_type = RoomType(sampled_room_type)  # membership already validated
+
+    size_options = [size.value for size in RoomSize]
+    size_choice, size_confidence, size_probabilities = _choice_answer(answers, "size", size_options)
+    sampled_size = _sample_complete_choice(
+        request, "size", size_choice, size_probabilities, size_options
+    )
+    size = RoomSize(sampled_size)
 
     danger_score, danger_confidence, danger_probabilities = _score_answer(
         answers, "danger", len(_DANGER_LEVELS)
@@ -620,8 +657,8 @@ def compose_jev_room(
     has_secret = secret_probability >= _NOUL_TRUE_THRESHOLD
 
     extra_count, exit_count_confidence, exit_count_probabilities = _exit_count_answer(answers)
-    exits = _compose_exits(request, room_type, extra_count, has_secret)
-    tags, tag_probabilities = _compose_tags(answers)
+    exits = _compose_exits(request, room_type, extra_count)
+    tags, atmosphere_choice, atmosphere_confidence, tag_probabilities = _compose_tags(answers)
 
     digest = hashlib.sha256(f"{request.run_id}:{request.request_id}:{model}".encode()).hexdigest()[
         :10
@@ -645,8 +682,10 @@ def compose_jev_room(
     metadata: dict[str, JsonValue] = {
         "room_type_confidence": room_type_confidence,
         "room_type_probabilities": room_type_probabilities,
+        "room_type_provider_choice": room_type_choice,
         "size_confidence": size_confidence,
         "size_probabilities": size_probabilities,
+        "size_provider_choice": size_choice,
         "danger_score": round(danger_score, 6),
         "danger_confidence": danger_confidence,
         "danger_probabilities": danger_probabilities,
@@ -660,6 +699,8 @@ def compose_jev_room(
         "secret_allowed": allow_secrets,
         "exit_count_confidence": exit_count_confidence,
         "exit_count_probabilities": exit_count_probabilities,
+        "atmosphere_choice": atmosphere_choice,
+        "atmosphere_confidence": atmosphere_confidence,
         "tag_probabilities": tag_probabilities,
         "exit_count": len(exits) - 1,
     }
@@ -808,7 +849,6 @@ def _compose_exits(
     request: GenerationRequest,
     room_type: RoomType,
     extra_count: int,
-    secret: bool,
 ) -> list[Exit]:
     frontier = request.target_exit.direction
     back_kind = ExitKind.STAIRS if frontier in _VERTICAL else ExitKind.DOOR
@@ -833,24 +873,17 @@ def _compose_exits(
         else:
             kind = ExitKind.DOOR
         exits.append(Exit(direction=direction, kind=kind, locked=False))
-    if secret and len(exits) > 1:
-        last = exits[-1]
-        exits[-1] = Exit(direction=last.direction, kind=ExitKind.SECRET, locked=False)
     return exits
 
 
-def _compose_tags(answers: Mapping[str, Any]) -> tuple[list[EnvironmentalTag], dict[str, float]]:
-    scores = {tag: _noul_answer(answers, f"tag_{tag.value}") for tag in _TAG_STATEMENTS}
-    probabilities = {tag.value: round(value, 6) for tag, value in scores.items()}
-    selected = [tag for tag, probability in scores.items() if probability >= _NOUL_TRUE_THRESHOLD]
-    for tag, contradiction in _TAG_CONTRADICTIONS.items():
-        if tag in selected and contradiction in selected:
-            loser = tag if scores[tag] < scores[contradiction] else contradiction
-            selected.remove(loser)
-    # Cap at the contract maximum, keeping the strongest signals; fixed tag
-    # order breaks ties so the result is deterministic per answer set.
-    selected.sort(key=lambda tag: (-scores[tag], list(_TAG_STATEMENTS).index(tag)))
-    return selected[:8], probabilities
+def _compose_tags(
+    answers: Mapping[str, Any],
+) -> tuple[list[EnvironmentalTag], str, float, dict[str, float]]:
+    choice, confidence, probabilities = _choice_answer(
+        answers, "atmosphere", list(_ATMOSPHERE_CRITERIA)
+    )
+    tags = [] if choice == "none" else [EnvironmentalTag(choice)]
+    return tags, choice, confidence, probabilities
 
 
 def _describe(size: RoomSize, room_type: RoomType, tags: list[EnvironmentalTag]) -> str:

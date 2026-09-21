@@ -103,25 +103,30 @@ Noul answers carry no `confidence` (the probability is the signal); score
 
 | Question id | Type | Decides |
 |---|---|---|
-| `room_type` | choice | `RoomPlan.room_type` among code-gated eligible types |
-| `size` | choice | `RoomPlan.size` |
+| `room_type` | choice | weighted deterministic selection from the complete calibrated distribution among code-gated eligible types |
+| `size` | choice | weighted deterministic selection from the complete calibrated distribution for `RoomPlan.size` |
 | `danger` | score (5 levels) | `RoomPlan.danger` (round + 1, clamped 1..5, capped by `options.max_danger`) |
 | `enemy_density` | score (5 levels) | `RoomPlan.enemy_density` (score/4, unless `options.target_enemy_density`) |
 | `loot_density` | score (5 levels) | `RoomPlan.loot_density` (score/4, unless `options.target_loot_density`) |
 | `has_secret` | noul | `secret_probability` = noul; `has_secret` = noul ≥ 0.5 (0 when `options.allow_secrets=false`) |
 | `exit_count` | choice 0–3 | number of extra exits; directions assigned deterministically in code |
-| `tag_<name>` × 10 | noul | environmental tags with noul ≥ 0.5, contradictions resolved, capped at 8 |
+| `atmosphere` | choice | zero or one environmental tag, with `none` available when no motif strongly fits |
 
 Code-owned gates (mirroring the rules baseline so providers stay
 comparable): `entrance`/`stairs_up` never offered; `stairs_down` is preferred
 only after 6 rooms on the depth; `vault`/`treasure` are preferred from depth 2;
-`forbidden_room_types` are never offered. If the forbidden list leaves only a
+`forbidden_room_types` are never offered. Complete `room_type` and `size`
+probability distributions are sampled from a hash of the request identity,
+so repeated runs can vary while replaying the same request remains stable.
+Partial distributions retain Jev's explicit top choice for compatibility.
+If the forbidden list leaves only a
 normally gated type, pacing is relaxed so the hard caller constraint still
 wins. The back-link exit (opposite of `target_exit.direction`,
 stairs for vertical frontiers) is always present; extra exits take free
-cardinal directions in fixed order; the last extra becomes `secret` kind when
-`has_secret`. Non-Jev string fields (`room_id`, `description`) are derived
-deterministically in code: Jev returns no prose.
+cardinal directions in a request-stable hashed order. `has_secret` controls
+hidden contents inside the generated room; it never hides a navigation exit.
+Non-Jev string fields (`room_id`, `description`) are derived deterministically
+in code: Jev returns no prose.
 
 ## Error classification
 
@@ -153,13 +158,14 @@ Jev decision's calibrated signal — confidence, probability distribution, or
 noul value — not just the room-level ones:
 
 - `room_type_*`, `size_*`, `exit_count_*` (choices): `*_confidence` +
-  `*_probabilities` (the chosen option itself is the corresponding
-  `RoomPlan` field)
+  `*_probabilities`; `room_type_provider_choice` and `size_provider_choice`
+  retain Jev's top choices when the room plan uses deterministic sampling
 - `danger_*`, `enemy_density_*`, `loot_density_*` (scores): `*_score` (the
   raw upstream number, since `RoomPlan` holds the transformed value),
   `*_confidence`, `*_probabilities`
 - `has_secret_probability` (the raw Jev noul even when secrets are disabled),
-  `secret_allowed`, and `tag_probabilities` (all ten tag nouls, selected or not)
+  `secret_allowed`, `atmosphere_choice`, `atmosphere_confidence`, and
+  `tag_probabilities` (the atmosphere distribution)
 - request telemetry: `jev_model` (versioned id from the response),
   `upstream_http_status`, `cf_ray` (response header, when present),
   `adapter_elapsed_ms`, `exit_count` (realized extra exits)

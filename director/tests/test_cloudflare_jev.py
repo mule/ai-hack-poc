@@ -39,11 +39,8 @@ from dungeon_director.service import DirectorService
 from dungeon_director.settings import DirectorSettings
 
 FIXTURES = Path(__file__).resolve().parent / "fixtures" / "jev"
-TAG_NAMES = [tag.value for tag in EnvironmentalTag]
 FAKE_ACCOUNT = "acct-test-1234"
 FAKE_TOKEN = "cf-secret-token-do-not-print"
-
-TAG_BASE_PROBABILITY = 0.1
 
 
 class FakeTransport:
@@ -124,11 +121,13 @@ def jev_answers(**overrides: Any) -> dict[str, Any]:
             "confidence": 0.73,
             "probabilities": {"1": 0.68, "0": 0.14, "2": 0.16, "3": 0.02},
         },
+        "atmosphere": {
+            "type": "choice",
+            "choice": "dark",
+            "confidence": 0.72,
+            "probabilities": {"dark": 0.72, "none": 0.28},
+        },
     }
-    answers.update(
-        {f"tag_{name}": {"type": "noul", "noul": TAG_BASE_PROBABILITY} for name in TAG_NAMES}
-    )
-    answers["tag_dark"] = {"type": "noul", "noul": 0.72}
     answers.update(overrides)
     return answers
 
@@ -548,7 +547,7 @@ def test_questions_use_only_documented_types_and_shapes():
     assert questions["room_type"]["type"] == "choice"
 
 
-def test_question_set_covers_the_room_decision_and_all_tags():
+def test_question_set_covers_the_room_decision_in_eight_questions():
     transport = FakeTransport([http_response(envelope(jev_payload()))])
 
     generate(transport)
@@ -562,9 +561,11 @@ def test_question_set_covers_the_room_decision_and_all_tags():
         "loot_density",
         "has_secret",
         "exit_count",
+        "atmosphere",
     }
-    assert expected <= set(questions)
-    assert {f"tag_{name}" for name in TAG_NAMES} <= set(questions)
+    assert set(questions) == expected
+    assert questions["atmosphere"]["type"] == "choice"
+    assert "none" in questions["atmosphere"]["criteria"]
 
 
 def test_room_type_options_honour_forbidden_list_and_pacing_gates():
@@ -645,7 +646,7 @@ def test_generate_composes_a_schema_valid_room_plan():
     assert len(directions) == 2
     assert directions[1] in {"north", "east", "west"}
     assert room.exits[0].kind is ExitKind.DOOR
-    assert room.exits[1].kind is ExitKind.SECRET  # has_secret marks the last extra
+    assert room.exits[1].kind is ExitKind.DOOR
     assert room.room_id.startswith("jev-")
     assert room.description
     # The service re-validates anyway; assert it survives the canonical envelope.
@@ -728,8 +729,12 @@ def test_metadata_preserves_every_decision_signal():
             "confidence": 0.51,
             "probabilities": {"0": 0.09, "1": 0.2, "2": 0.62, "3": 0.09},
         },
-        tag_dark={"type": "noul", "noul": 0.91},
-        tag_fungal={"type": "noul", "noul": 0.55},
+        atmosphere={
+            "type": "choice",
+            "choice": "fungal",
+            "confidence": 0.55,
+            "probabilities": {"fungal": 0.55, "dark": 0.35, "none": 0.1},
+        },
     )
     transport = FakeTransport([http_response(envelope(jev_payload(answers)))])
 
@@ -763,13 +768,11 @@ def test_metadata_preserves_every_decision_signal():
         "3": 0.02,
         "4": 0.01,
     }
-    # nouls: the probability is the signal
+    # noul and atmosphere signals
     assert metadata["has_secret_probability"] == 0.73
-    tag_probabilities = metadata["tag_probabilities"]
-    assert len(tag_probabilities) == 10  # every tag question's noul, selected or not
-    assert tag_probabilities["dark"] == 0.91
-    assert tag_probabilities["fungal"] == 0.55
-    assert tag_probabilities["noisy"] == TAG_BASE_PROBABILITY
+    assert metadata["atmosphere_choice"] == "fungal"
+    assert metadata["atmosphere_confidence"] == 0.55
+    assert metadata["tag_probabilities"] == {"fungal": 0.55, "dark": 0.35, "none": 0.1}
     # exit_count: confidence + distribution
     assert metadata["exit_count_confidence"] == 0.51
     assert metadata["exit_count_probabilities"] == {"0": 0.09, "1": 0.2, "2": 0.62, "3": 0.09}
@@ -794,7 +797,8 @@ def test_recorded_response_fixture_drives_a_valid_room():
 
     room = result.payload
     assert isinstance(room, RoomPlan)
-    assert room.room_type is RoomType.CHAMBER
+    assert room.room_type is RoomType.SHRINE
+    assert result.provider_metadata["room_type_provider_choice"] == "chamber"
     assert room.secret_probability == 0.61
     assert room.environmental_tags == [EnvironmentalTag.DARK]
 
@@ -1047,8 +1051,16 @@ def test_unknown_model_is_rejected_locally_without_a_network_call():
     assert transport.requests == []
 
 
-def test_noul_threshold_keeps_the_room_plan_secret_invariant():
-    answers = jev_answers(has_secret={"type": "noul", "noul": 0.5})
+def test_secret_room_contents_do_not_hide_navigation_exits():
+    answers = jev_answers(
+        has_secret={"type": "noul", "noul": 0.5},
+        exit_count={
+            "type": "choice",
+            "choice": "2",
+            "confidence": 0.8,
+            "probabilities": {"2": 0.8},
+        },
+    )
     transport = FakeTransport([http_response(envelope(jev_payload(answers)))])
 
     result = generate(transport)
@@ -1056,6 +1068,8 @@ def test_noul_threshold_keeps_the_room_plan_secret_invariant():
     room = result.payload
     assert room.has_secret is True
     assert room.secret_probability >= 0.5  # invariant: has_secret => probability > 0
+    assert len(room.exits) == 3
+    assert all(exit_.kind is not ExitKind.SECRET for exit_ in room.exits)
 
 
 def test_exit_directions_stay_unique_and_within_the_free_cardinals():
@@ -1107,21 +1121,67 @@ def test_single_extra_exit_direction_varies_across_requests_without_breaking_rep
     assert len(set(chosen)) > 1
 
 
-def test_tag_contradictions_are_resolved_and_the_cap_is_enforced():
-    probabilities = {name: 0.9 for name in TAG_NAMES}
-    probabilities["icy"] = 0.95
-    probabilities["hot"] = 0.85
+def test_atmosphere_choice_produces_at_most_one_environmental_tag():
     answers = jev_answers(
-        **{f"tag_{name}": {"type": "noul", "noul": value} for name, value in probabilities.items()}
+        atmosphere={
+            "type": "choice",
+            "choice": "icy",
+            "confidence": 0.55,
+            "probabilities": {"icy": 0.55, "hot": 0.35, "none": 0.1},
+        }
     )
     transport = FakeTransport([http_response(envelope(jev_payload(answers)))])
 
     result = generate(transport)
 
-    tags = result.payload.environmental_tags
-    assert len(tags) == 8  # 10 selected, capped at the contract maximum
-    assert not ({EnvironmentalTag.ICY, EnvironmentalTag.HOT} <= set(tags))
-    assert EnvironmentalTag.ICY in tags  # the stronger signal survives
+    assert result.payload.environmental_tags == [EnvironmentalTag.ICY]
+
+
+def test_complete_choice_distributions_add_deterministic_room_variety():
+    room_probabilities = {
+        "room": 0.125,
+        "corridor": 0.125,
+        "cavern": 0.125,
+        "chamber": 0.125,
+        "shrine": 0.125,
+        "shop": 0.125,
+        "treasure": 0.125,
+        "stairs_down": 0.125,
+    }
+    size_probabilities = {size: 0.2 for size in ("tiny", "small", "medium", "large", "huge")}
+    answers = jev_answers(
+        room_type={
+            "type": "choice",
+            "choice": "room",
+            "confidence": 0.125,
+            "probabilities": room_probabilities,
+        },
+        size={
+            "type": "choice",
+            "choice": "small",
+            "confidence": 0.2,
+            "probabilities": size_probabilities,
+        },
+    )
+    room_types: list[RoomType] = []
+    sizes: list[str] = []
+
+    for index in range(16):
+        request = make_request(request_id=f"req-variety-{index}")
+        first = generate(
+            FakeTransport([http_response(envelope(jev_payload(answers)))]), request=request
+        )
+        replay = generate(
+            FakeTransport([http_response(envelope(jev_payload(answers)))]), request=request
+        )
+        assert first.payload == replay.payload
+        assert first.provider_metadata["room_type_provider_choice"] == "room"
+        assert first.provider_metadata["size_provider_choice"] == "small"
+        room_types.append(first.payload.room_type)
+        sizes.append(first.payload.size.value)
+
+    assert len(set(room_types)) > 1
+    assert len(set(sizes)) > 1
 
 
 def test_room_id_is_deterministic_per_request_and_model():

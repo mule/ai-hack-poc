@@ -11,7 +11,7 @@ import pytest
 from fakes import make_request
 
 from dungeon_director.cloudflare_jev import JevTransportRequest, JevTransportResponse
-from dungeon_director.contracts import EnvironmentalTag, RoomPlan, RoomType
+from dungeon_director.contracts import RoomPlan, RoomType
 from dungeon_director.errors import DirectorConfigError, ErrorKind, ProviderError
 from dungeon_director.registry import default_registry
 from dungeon_director.typesafe_jev import (
@@ -84,8 +84,13 @@ def answers() -> dict[str, Any]:
             "confidence": 0.8,
             "probabilities": {"1": 1.0},
         },
+        "atmosphere": {
+            "type": "choice",
+            "choice": "none",
+            "confidence": 0.8,
+            "probabilities": {"none": 0.8, "dark": 0.2},
+        },
     }
-    result.update({f"tag_{tag.value}": {"type": "noul", "noul": 0.1} for tag in EnvironmentalTag})
     return result
 
 

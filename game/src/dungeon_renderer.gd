@@ -136,11 +136,10 @@ func _draw() -> void:
 ## Keep an opened door legible after its frontier has committed. Fast hosted
 ## providers can resolve the room between the opening action and the player's
 ## next step, at which point the unknown-frontier highlight correctly goes
-## away. The brighter frame and swung leaf make the remaining DOOR_OPEN tile
-## visibly distinct from ordinary floor.
+## away. Separated jambs and a swung leaf make the remaining DOOR_OPEN tile
+## visibly distinct from both ordinary floor and a solid wall.
 func _draw_open_door(pos: Vector2i, rect: Rect2) -> void:
 	var direction := _door_direction(pos)
-	draw_rect(rect.grow(-3.0), COLOR_DOOR_OPEN, false, 2.5)
 	if direction in ["east", "west"]:
 		# East/west travel crosses a vertical wall; show horizontal jambs and
 		# a leaf swung along the room side of the doorway.

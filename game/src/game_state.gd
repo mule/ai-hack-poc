@@ -295,6 +295,13 @@ func player_action_step(dir: Vector2i) -> bool:
 		_process_turn()
 		return true
 
+	# An open frontier door is only a visual promise until its room commits.
+	# Keep the player on the committed side so a failed generation cannot seal
+	# the tile underneath them and leave them apparently standing in a wall.
+	if world != null and not world.open_frontier_at(target_pos).is_empty():
+		log_message("The way ahead is still taking shape...")
+		return false
+
 	# 3. Check if tile is walkable floor/open door
 	if is_walkable(target_pos):
 		player_pos = target_pos

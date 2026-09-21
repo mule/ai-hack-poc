@@ -342,6 +342,15 @@ func _interpret(result: Dictionary, request_id: String) -> Dictionary:
 func _place_plan(f: Dictionary, request_id: String, plan: Dictionary, source: String, meta: Dictionary) -> Dictionary:
 	var world: DungeonWorld = game_state.world
 	var base := plan.duplicate(true)
+	var placement_meta := meta.duplicate(true)
+	var proposed_room_id := str(base.get("room_id", "room"))
+	if world.rooms.has(proposed_room_id):
+		var unique_room_id := _unique_room_id(world, proposed_room_id, f.key, request_id)
+		base["room_id"] = unique_room_id
+		# Keep recorder/HUD decisions aligned with the room that actually commits.
+		plan["room_id"] = unique_room_id
+		placement_meta["provider_room_id"] = proposed_room_id
+		placement_meta["room_id_rewritten"] = true
 	var cardinal: Array = []
 	for exit_entry in base.get("exits", []):
 		if RulesBaseline.OPPOSITE.has(exit_entry.direction):
@@ -355,7 +364,7 @@ func _place_plan(f: Dictionary, request_id: String, plan: Dictionary, source: St
 		candidate["size"] = size
 		var pruned: Array = []
 		for attempt in range(2):
-			var attempt_meta := meta.duplicate()
+			var attempt_meta := placement_meta.duplicate()
 			attempt_meta["room_type"] = base.get("room_type", "room")
 			attempt_meta["danger"] = base.get("danger", 1)
 			attempt_meta["size_used"] = size
@@ -376,6 +385,23 @@ func _place_plan(f: Dictionary, request_id: String, plan: Dictionary, source: St
 		if not (last.reason in DungeonWorld.GEOMETRIC_REASONS):
 			return last
 	return last
+
+
+## Provider room ids are correlation hints, not world-global authority. If a
+## provider repeats one, derive a bounded replay-stable local id rather than
+## rejecting sound room semantics and cascading into a sealed doorway.
+func _unique_room_id(world: DungeonWorld, proposed: String, frontier_key: String, request_id: String) -> String:
+	var digest := ("%s|%s|%s" % [proposed, frontier_key, request_id]).sha256_text().substr(0, 10)
+	var suffix := "-" + digest
+	var stem := proposed.left(maxi(1, DungeonContracts.ID_MAX_LENGTH - suffix.length()))
+	var candidate := stem + suffix
+	var counter := 2
+	while world.rooms.has(candidate):
+		var numbered_suffix := "%s-%d" % [suffix, counter]
+		stem = proposed.left(maxi(1, DungeonContracts.ID_MAX_LENGTH - numbered_suffix.length()))
+		candidate = stem + numbered_suffix
+		counter += 1
+	return candidate
 
 
 ## Deterministic local plan -> commit; last resort seals the exit.
