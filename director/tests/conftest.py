@@ -5,7 +5,7 @@ provider credentials exported. For every test that is not marked ``live``:
 
 * ambient OpenTelemetry exporter settings are removed for every test, including
   live provider tests, so test runs cannot leak telemetry to another service;
-* ``GROQ_*`` and ``RUN_LIVE_GROQ`` are removed from the environment, so a
+* hosted-provider keys and live opt-ins are removed from the environment, so a
   developer's real key cannot silently make a provider "available";
 * outbound sockets to anything but loopback (and DNS lookups for anything but
   loopback) are refused, and the test fails at teardown if anything tried.
@@ -69,6 +69,9 @@ def offline_guard(
     for name in [name for name in os.environ if name.startswith("GROQ_")]:
         monkeypatch.delenv(name)
     monkeypatch.delenv("RUN_LIVE_GROQ", raising=False)
+    for name in [name for name in os.environ if name.startswith("TYPESAFE_")]:
+        monkeypatch.delenv(name)
+    monkeypatch.delenv("RUN_LIVE_TYPESAFE_JEV", raising=False)
 
     attempts: list[str] = []
     real_getaddrinfo = socket.getaddrinfo

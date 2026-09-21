@@ -13,7 +13,7 @@ const COLOR_WALL_OUTLINE = Color(0.12, 0.13, 0.15)
 const COLOR_FLOOR = Color(0.08, 0.09, 0.11)
 const COLOR_FLOOR_GRID = Color(0.13, 0.14, 0.16)
 const COLOR_DOOR_CLOSED = Color(0.72, 0.45, 0.2)
-const COLOR_DOOR_OPEN = Color(0.4, 0.3, 0.2)
+const COLOR_DOOR_OPEN = Color(0.68, 0.42, 0.18)
 const COLOR_PLAYER = Color(0.2, 0.85, 0.4) # bright hero green
 const COLOR_GOBLIN = Color(0.85, 0.3, 0.2) # red
 const COLOR_ORC = Color(0.75, 0.2, 0.75)   # purple/magenta
@@ -72,9 +72,7 @@ func _draw() -> void:
 				)
 			GameState.TileType.DOOR_OPEN:
 				draw_rect(rect, COLOR_FLOOR)
-				# Draw open door frame
-				draw_rect(Rect2(pos.x * TILE_SIZE + 2, pos.y * TILE_SIZE + 2, 6, TILE_SIZE - 4), COLOR_DOOR_OPEN)
-				draw_rect(Rect2(pos.x * TILE_SIZE + TILE_SIZE - 8, pos.y * TILE_SIZE + 2, 6, TILE_SIZE - 4), COLOR_DOOR_OPEN)
+				_draw_open_door(pos, rect)
 			GameState.TileType.STAIRS_DOWN, GameState.TileType.STAIRS_UP:
 				draw_rect(rect, COLOR_FLOOR)
 				for step in range(4):
@@ -133,6 +131,41 @@ func _draw() -> void:
 		# Eyes/indicator
 		draw_circle(Vector2(ppos.x * TILE_SIZE + 11, ppos.y * TILE_SIZE + 12), 2.5, Color.BLACK)
 		draw_circle(Vector2(ppos.x * TILE_SIZE + 21, ppos.y * TILE_SIZE + 12), 2.5, Color.BLACK)
+
+
+## Keep an opened door legible after its frontier has committed. Fast hosted
+## providers can resolve the room between the opening action and the player's
+## next step, at which point the unknown-frontier highlight correctly goes
+## away. The brighter frame and swung leaf make the remaining DOOR_OPEN tile
+## visibly distinct from ordinary floor.
+func _draw_open_door(pos: Vector2i, rect: Rect2) -> void:
+	var direction := _door_direction(pos)
+	draw_rect(rect.grow(-3.0), COLOR_DOOR_OPEN, false, 2.5)
+	if direction in ["east", "west"]:
+		# East/west travel crosses a vertical wall; show horizontal jambs and
+		# a leaf swung along the room side of the doorway.
+		draw_rect(Rect2(rect.position + Vector2(2, 2), Vector2(TILE_SIZE - 4, 5)), COLOR_DOOR_OPEN)
+		draw_rect(Rect2(rect.position + Vector2(2, TILE_SIZE - 7), Vector2(TILE_SIZE - 4, 5)), COLOR_DOOR_OPEN)
+		var leaf_x := 4.0 if direction == "east" else TILE_SIZE / 2.0
+		draw_rect(Rect2(rect.position + Vector2(leaf_x, 5), Vector2(TILE_SIZE / 2.0 - 4, 4)), COLOR_DOOR_OPEN)
+	else:
+		# North/south travel crosses a horizontal wall.
+		draw_rect(Rect2(rect.position + Vector2(2, 2), Vector2(5, TILE_SIZE - 4)), COLOR_DOOR_OPEN)
+		draw_rect(Rect2(rect.position + Vector2(TILE_SIZE - 7, 2), Vector2(5, TILE_SIZE - 4)), COLOR_DOOR_OPEN)
+		var leaf_y := 4.0 if direction == "south" else TILE_SIZE / 2.0
+		draw_rect(Rect2(rect.position + Vector2(5, leaf_y), Vector2(4, TILE_SIZE / 2.0 - 4)), COLOR_DOOR_OPEN)
+
+
+func _door_direction(pos: Vector2i) -> String:
+	if game_state.world != null:
+		for frontier in game_state.world.frontiers.values():
+			if frontier.pos == pos:
+				return str(frontier.direction)
+	# Legacy/static maps have no frontier records. Infer the doorway axis from
+	# the wall pair around it so their open doors receive the same treatment.
+	var above: bool = game_state.get_tile(pos + Vector2i.UP) == GameState.TileType.WALL
+	var below: bool = game_state.get_tile(pos + Vector2i.DOWN) == GameState.TileType.WALL
+	return "east" if above and below else "north"
 
 
 func _draw_frontiers() -> void:

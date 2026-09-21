@@ -247,6 +247,13 @@ deterministic: the same state and frontier always yield the same room, its
 depth equals the request depth, and it always has an exit back to the frontier
 it was generated from.
 
+The direct TypeSafe Jev provider (`typesafe-jev` / `jev-latest`) calls
+TypeSafe's System One endpoint with the same typed room questions and canonical
+room composition used by the Cloudflare adapter. It is registered always but
+becomes available only when `TYPESAFE_API_KEY` is set server-side. Setup,
+transport behavior, error mapping, and the opt-in live test are documented in
+`director/docs/typesafe-jev.md`.
+
 The Cloudflare Jev provider (`cloudflare-jev` / `typesafe/jev`, issue #8)
 asks Jev typed questions (room archetype, size, danger, densities, secret,
 exits, atmosphere) in a single call and composes the calibrated answers into
@@ -368,6 +375,11 @@ load; its contents belong to the game shell.
   they never appear in `/v1/config`, responses, error messages, logs or test
   output. Missing or invalid optional Jev configuration leaves that provider
   `available: false`; choosing it as the default still stops startup.
+- The direct `typesafe-jev` provider reads `TYPESAFE_API_KEY`,
+  `TYPESAFE_JEV_MODEL` (default `jev-latest`) and `TYPESAFE_JEV_API_URL`
+  (default `https://api.typesafe.ai/v1/systemone`). Its credential hygiene,
+  HTTPS requirements, unavailable-provider behavior, and timeout ownership
+  match the other hosted adapters.
 - The `groq` provider reads `GROQ_API_KEY`, `GROQ_MODEL` (default
   `openai/gpt-oss-20b`), `GROQ_REASONING_EFFORT` (default `low`; GPT-OSS accepts
   only `low`, `medium` or `high`), `GROQ_MAX_COMPLETION_TOKENS` (default `2048`)
@@ -399,15 +411,16 @@ director/       FastAPI director service
   dungeon_director/   Python package: app.py (HTTP + app factory), service.py
                       (timeout/validation/failure policy), providers.py,
                       registry.py, shadow.py (shadow evaluation, issue #13),
-                      rules.py (baseline), cloudflare_jev.py
-                      (TypeSafe Jev via Cloudflare, issue #8), groq.py
+                      rules.py (baseline), typesafe_jev.py (direct TypeSafe
+                      Jev), cloudflare_jev.py (TypeSafe Jev via Cloudflare,
+                      issue #8), groq.py
                       (Groq GPT-OSS, issue #9), cerebras.py
                       (Cerebras Qwen, issue #10), telemetry.py
                       (OpenTelemetry, issue #11), settings.py, contracts.py
-  docs/               Provider docs (cloudflare-jev.md, groq.md, cerebras.md)
+  docs/               Provider docs (typesafe-jev.md, cloudflare-jev.md, groq.md, cerebras.md)
                       and shadow-mode.md
   tests/              Offline tests + fixtures (incl. sanitized provider samples)
-                 and live tests (Jev, Groq, and Cerebras,
+                 and live tests (direct TypeSafe Jev, Cloudflare Jev, Groq, and Cerebras,
                  credential- and opt-in-gated; conftest.py blocks the network
                  for every other test)
 benchmarks/     Gameplay recorder/replay CLI (#14); simulation/ holds the

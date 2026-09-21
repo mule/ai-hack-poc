@@ -641,7 +641,9 @@ def test_generate_composes_a_schema_valid_room_plan():
     assert room.has_secret is True
     assert room.environmental_tags == [EnvironmentalTag.DARK]
     directions = [exit_.direction.value for exit_ in room.exits]
-    assert directions == ["south", "north"]  # back-link first, then one extra
+    assert directions[0] == "south"  # back-link first
+    assert len(directions) == 2
+    assert directions[1] in {"north", "east", "west"}
     assert room.exits[0].kind is ExitKind.DOOR
     assert room.exits[1].kind is ExitKind.SECRET  # has_secret marks the last extra
     assert room.room_id.startswith("jev-")
@@ -1075,6 +1077,36 @@ def test_exit_directions_stay_unique_and_within_the_free_cardinals():
     assert set(directions[1:]) <= {"north", "south", "east"}
 
 
+def test_single_extra_exit_direction_varies_across_requests_without_breaking_replays():
+    answers = jev_answers(
+        exit_count={
+            "type": "choice",
+            "choice": "1",
+            "confidence": 0.9,
+            "probabilities": {"1": 1.0},
+        }
+    )
+    chosen: list[str] = []
+
+    for index in range(12):
+        request = make_request(request_id=f"req-direction-{index}")
+        first = generate(
+            FakeTransport([http_response(envelope(jev_payload(answers)))]), request=request
+        )
+        replay = generate(
+            FakeTransport([http_response(envelope(jev_payload(answers)))]), request=request
+        )
+        first_directions = [exit_.direction.value for exit_ in first.payload.exits]
+        replay_directions = [exit_.direction.value for exit_ in replay.payload.exits]
+
+        assert first_directions == replay_directions
+        assert first_directions[0] == "south"
+        assert first_directions[1] in {"north", "east", "west"}
+        chosen.append(first_directions[1])
+
+    assert len(set(chosen)) > 1
+
+
 def test_tag_contradictions_are_resolved_and_the_cap_is_enforced():
     probabilities = {name: 0.9 for name in TAG_NAMES}
     probabilities["icy"] = 0.95
@@ -1296,7 +1328,13 @@ def test_default_registry_keeps_rules_default_and_flags_jev_unavailable(monkeypa
 
     described = {d.id: d for d in default_registry().describe()}
 
-    assert set(described) == {"rules-baseline", "cloudflare-jev", "groq", "cerebras"}
+    assert set(described) == {
+        "rules-baseline",
+        "typesafe-jev",
+        "cloudflare-jev",
+        "groq",
+        "cerebras",
+    }
     assert described["rules-baseline"].available is True
     assert described["cloudflare-jev"].available is False
     assert described["cloudflare-jev"].default_model == "typesafe/jev"

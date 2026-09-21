@@ -271,8 +271,8 @@ inputs (needs Godot) with `make eval-corpus-rebuild`.
 Separate from the offline path and refused unless confirmed:
 
 ```sh
-export GROQ_API_KEY=...  CEREBRAS_API_KEY=...        # server-side credentials only
-make eval-live EVAL_LIVE=1 EVAL_SELECT='groq cerebras' \
+export TYPESAFE_API_KEY=... GROQ_API_KEY=... CEREBRAS_API_KEY=... # server-side only
+make eval-live EVAL_LIVE=1 EVAL_SELECT='typesafe-jev groq cerebras' \
   EVAL_ARGS='--vantage-point "home fibre, Helsinki" --label first-comparison'
 ```
 

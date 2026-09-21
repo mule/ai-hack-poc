@@ -13,6 +13,16 @@
       "retrieved_on": "2026-09-19"
     },
     {
+      "provider": "typesafe-jev",
+      "model": "jev-latest",
+      "input_usd_per_1m_tokens": null,
+      "output_usd_per_1m_tokens": null,
+      "per_request_usd": null,
+      "source": null,
+      "retrieved_on": null,
+      "notes": "Use the current direct TypeSafe Jev price for your account and cite https://docs.typesafe.ai/models."
+    },
+    {
       "provider": "cloudflare-jev",
       "model": "typesafe/jev",
       "input_usd_per_1m_tokens": null,

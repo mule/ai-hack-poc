@@ -37,6 +37,7 @@ testpaths = ["tests"]
 markers = [
     "live: makes real billable provider calls; requires provider-specific opt-in and credentials",
     "live_cerebras: makes real billable Cerebras calls; requires RUN_LIVE_CEREBRAS=1 and credentials",
+    "live_typesafe_jev: makes real billable direct TypeSafe calls; requires RUN_LIVE_TYPESAFE_JEV=1 and credentials",
 ]
 
 [tool.ruff]

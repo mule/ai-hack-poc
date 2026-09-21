@@ -75,6 +75,8 @@ __all__ = [
     "JevTransportRequest",
     "JevTransportResponse",
     "CloudflareJevProvider",
+    "compose_jev_room",
+    "decode_jev_payload",
 ]
 
 CLOUDFLARE_JEV_PROVIDER_ID = "cloudflare-jev"
@@ -236,7 +238,7 @@ class HttpxJevTransport:
         ) as response:
             async for chunk in response.aiter_bytes():
                 if len(body) + len(chunk) > _MAX_RESPONSE_BODY_BYTES:
-                    raise RuntimeError("cloudflare response exceeded the adapter body limit")
+                    raise RuntimeError("jev response exceeded the adapter body limit")
                 body.extend(chunk)
             return JevTransportResponse(
                 status_code=response.status_code,
@@ -580,6 +582,90 @@ def _noul_answer(answers: Mapping[str, Any], key: str) -> float:
     return _unit_number(answer["noul"], f"{key}.noul")
 
 
+def compose_jev_room(
+    request: GenerationRequest, answers: Mapping[str, Any], model: str
+) -> tuple[RoomPlan, dict[str, JsonValue]]:
+    """Compose shared Jev decisions into the director's canonical room contract."""
+    options = request.options
+    allow_secrets = options.allow_secrets if options else True
+
+    eligible = {room_type.value for room_type in _eligible_room_types(request)}
+    room_type_choice, room_type_confidence, room_type_probabilities = _choice_answer(
+        answers, "room_type", eligible
+    )
+    room_type = RoomType(room_type_choice)  # membership already validated
+
+    size_choice, size_confidence, size_probabilities = _choice_answer(
+        answers, "size", {size.value for size in RoomSize}
+    )
+    size = RoomSize(size_choice)
+
+    danger_score, danger_confidence, danger_probabilities = _score_answer(
+        answers, "danger", len(_DANGER_LEVELS)
+    )
+    danger = math.floor(danger_score + 0.5) + 1
+    if options and options.max_danger is not None:
+        danger = min(danger, options.max_danger)
+    danger = min(max(danger, 1), 5)
+
+    enemy_density, enemy_score, enemy_confidence, enemy_probabilities = _density_from_score(
+        answers, "enemy_density", options.target_enemy_density if options else None
+    )
+    loot_density, loot_score, loot_confidence, loot_probabilities = _density_from_score(
+        answers, "loot_density", options.target_loot_density if options else None
+    )
+
+    secret_decision = _noul_answer(answers, "has_secret")
+    secret_probability = secret_decision if allow_secrets else 0.0
+    has_secret = secret_probability >= _NOUL_TRUE_THRESHOLD
+
+    extra_count, exit_count_confidence, exit_count_probabilities = _exit_count_answer(answers)
+    exits = _compose_exits(request, room_type, extra_count, has_secret)
+    tags, tag_probabilities = _compose_tags(answers)
+
+    digest = hashlib.sha256(f"{request.run_id}:{request.request_id}:{model}".encode()).hexdigest()[
+        :10
+    ]
+    description = _describe(size, room_type, tags)
+
+    room = RoomPlan(
+        room_id=f"jev-{digest}",
+        depth=request.state.depth,
+        room_type=room_type,
+        size=size,
+        danger=danger,
+        exits=exits,
+        enemy_density=enemy_density,
+        loot_density=loot_density,
+        secret_probability=round(secret_probability, 2),
+        has_secret=has_secret,
+        environmental_tags=tags,
+        description=description,
+    )
+    metadata: dict[str, JsonValue] = {
+        "room_type_confidence": room_type_confidence,
+        "room_type_probabilities": room_type_probabilities,
+        "size_confidence": size_confidence,
+        "size_probabilities": size_probabilities,
+        "danger_score": round(danger_score, 6),
+        "danger_confidence": danger_confidence,
+        "danger_probabilities": danger_probabilities,
+        "enemy_density_score": round(enemy_score, 6),
+        "enemy_density_confidence": enemy_confidence,
+        "enemy_density_probabilities": enemy_probabilities,
+        "loot_density_score": round(loot_score, 6),
+        "loot_density_confidence": loot_confidence,
+        "loot_density_probabilities": loot_probabilities,
+        "has_secret_probability": round(secret_decision, 6),
+        "secret_allowed": allow_secrets,
+        "exit_count_confidence": exit_count_confidence,
+        "exit_count_probabilities": exit_count_probabilities,
+        "tag_probabilities": tag_probabilities,
+        "exit_count": len(exits) - 1,
+    }
+    return room, metadata
+
+
 # ---------------------------------------------------------------------------
 # The provider
 # ---------------------------------------------------------------------------
@@ -697,88 +783,7 @@ class CloudflareJevProvider(DungeonDirectorProvider):
     def _compose_room(
         self, request: GenerationRequest, answers: Mapping[str, Any], model: str
     ) -> tuple[RoomPlan, dict[str, JsonValue]]:
-        options = request.options
-        allow_secrets = options.allow_secrets if options else True
-
-        eligible = {room_type.value for room_type in _eligible_room_types(request)}
-        room_type_choice, room_type_confidence, room_type_probabilities = _choice_answer(
-            answers, "room_type", eligible
-        )
-        room_type = RoomType(room_type_choice)  # membership already validated
-
-        size_choice, size_confidence, size_probabilities = _choice_answer(
-            answers, "size", {size.value for size in RoomSize}
-        )
-        size = RoomSize(size_choice)
-
-        danger_score, danger_confidence, danger_probabilities = _score_answer(
-            answers, "danger", len(_DANGER_LEVELS)
-        )
-        danger = math.floor(danger_score + 0.5) + 1
-        if options and options.max_danger is not None:
-            danger = min(danger, options.max_danger)
-        danger = min(max(danger, 1), 5)
-
-        enemy_density, enemy_score, enemy_confidence, enemy_probabilities = _density_from_score(
-            answers, "enemy_density", options.target_enemy_density if options else None
-        )
-        loot_density, loot_score, loot_confidence, loot_probabilities = _density_from_score(
-            answers, "loot_density", options.target_loot_density if options else None
-        )
-
-        secret_decision = _noul_answer(answers, "has_secret")
-        secret_probability = secret_decision if allow_secrets else 0.0
-        has_secret = secret_probability >= _NOUL_TRUE_THRESHOLD  # >= 0.5 keeps the invariant > 0
-
-        extra_count, exit_count_confidence, exit_count_probabilities = _exit_count_answer(answers)
-        exits = _compose_exits(request, room_type, extra_count, has_secret)
-        tags, tag_probabilities = _compose_tags(answers)
-
-        digest = hashlib.sha256(
-            f"{request.run_id}:{request.request_id}:{model}".encode()
-        ).hexdigest()[:10]
-        description = _describe(size, room_type, tags)
-
-        room = RoomPlan(
-            room_id=f"jev-{digest}",
-            depth=request.state.depth,
-            room_type=room_type,
-            size=size,
-            danger=danger,
-            exits=exits,
-            enemy_density=enemy_density,
-            loot_density=loot_density,
-            secret_probability=round(secret_probability, 2),
-            has_secret=has_secret,
-            environmental_tags=tags,
-            description=description,
-        )
-        # Every Jev decision's calibrated signal is preserved (confidence,
-        # probability distribution, or noul value) inside the contract's
-        # 32-key / 8192-byte provider_metadata budget; keys and option names
-        # are fixed by the rubric, so the blob is structurally bounded.
-        metadata: dict[str, JsonValue] = {
-            "room_type_confidence": room_type_confidence,
-            "room_type_probabilities": room_type_probabilities,
-            "size_confidence": size_confidence,
-            "size_probabilities": size_probabilities,
-            "danger_score": round(danger_score, 6),
-            "danger_confidence": danger_confidence,
-            "danger_probabilities": danger_probabilities,
-            "enemy_density_score": round(enemy_score, 6),
-            "enemy_density_confidence": enemy_confidence,
-            "enemy_density_probabilities": enemy_probabilities,
-            "loot_density_score": round(loot_score, 6),
-            "loot_density_confidence": loot_confidence,
-            "loot_density_probabilities": loot_probabilities,
-            "has_secret_probability": round(secret_decision, 6),
-            "secret_allowed": allow_secrets,
-            "exit_count_confidence": exit_count_confidence,
-            "exit_count_probabilities": exit_count_probabilities,
-            "tag_probabilities": tag_probabilities,
-            "exit_count": len(exits) - 1,
-        }
-        return room, metadata
+        return compose_jev_room(request, answers, model)
 
 
 def _to_attr(env_name: str) -> str:
@@ -810,6 +815,18 @@ def _compose_exits(
     exits = [Exit(direction=_OPPOSITE[frontier], kind=back_kind, locked=False)]
 
     free = [direction for direction in _CARDINALS if direction != exits[0].direction]
+    # Jev decides how many branches the room should expose, while geometry
+    # remains code-owned. Do not map that count onto the enum's fixed order:
+    # with the common one-branch answer it made nearly every new door point
+    # north. A request-stable permutation keeps replays deterministic while
+    # distributing directions across a run.
+    identity = (
+        f"{request.run_id}:{request.request_id}:"
+        f"{request.target_exit.room_id}:{request.target_exit.direction.value}"
+    )
+    free.sort(
+        key=lambda direction: hashlib.sha256(f"{identity}:{direction.value}".encode()).digest()
+    )
     for direction in free[: min(max(extra_count, 0), len(free))]:
         if room_type is RoomType.CORRIDOR:
             kind = ExitKind.PASSAGE
@@ -946,6 +963,11 @@ def _jev_payload(payload: Any) -> tuple[Mapping[str, Any], str, UsageStats | Non
             output_tokens=_usage_int(output_tokens),
         )
     return answers, safe_model, usage
+
+
+def decode_jev_payload(payload: Any) -> tuple[Mapping[str, Any], str, UsageStats | None]:
+    """Validate a bare Jev response shared by Cloudflare and TypeSafe transports."""
+    return _jev_payload(payload)
 
 
 def _usage_int(value: Any) -> int | None:

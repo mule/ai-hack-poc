@@ -21,7 +21,11 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit
 
-from dungeon_director.cerebras import CEREBRAS_PROVIDER_ID, CerebrasConfig, CerebrasProvider
+from dungeon_director.cerebras import (
+    CEREBRAS_PROVIDER_ID,
+    CerebrasConfig,
+    CerebrasProvider,
+)
 from dungeon_director.cloudflare_jev import (
     CLOUDFLARE_JEV_PROVIDER_ID,
     CloudflareJevProvider,
@@ -32,6 +36,11 @@ from dungeon_director.errors import DirectorConfigError
 from dungeon_director.groq import GROQ_PROVIDER_ID, GroqConfig, GroqProvider
 from dungeon_director.providers import DungeonDirectorProvider
 from dungeon_director.rules import RULES_MODEL, RULES_PROVIDER_ID, RulesProvider
+from dungeon_director.typesafe_jev import (
+    TYPESAFE_JEV_PROVIDER_ID,
+    TypeSafeJevConfig,
+    TypeSafeJevProvider,
+)
 
 # `max_completion_tokens` is a budget, not a credential: only *_token/*_key names match.
 _SECRET_NAME_RE = re.compile(r"(^|_)(key|token)$|secret|password|account_id", re.IGNORECASE)
@@ -46,6 +55,7 @@ _PACKAGES = (
 
 # provider id -> (config class, provider class)
 HOSTED: dict[str, tuple[type, type]] = {
+    TYPESAFE_JEV_PROVIDER_ID: (TypeSafeJevConfig, TypeSafeJevProvider),
     CLOUDFLARE_JEV_PROVIDER_ID: (JevConfig, CloudflareJevProvider),
     GROQ_PROVIDER_ID: (GroqConfig, GroqProvider),
     CEREBRAS_PROVIDER_ID: (CerebrasConfig, CerebrasProvider),

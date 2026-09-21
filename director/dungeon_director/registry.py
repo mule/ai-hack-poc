@@ -31,6 +31,7 @@ from dungeon_director.providers import (
     ProviderAvailability,
 )
 from dungeon_director.rules import RulesProvider
+from dungeon_director.typesafe_jev import TypeSafeJevProvider
 
 __all__ = ["ProviderDescriptor", "ProviderRegistry", "ProviderSelection", "default_registry"]
 
@@ -192,20 +193,30 @@ def default_registry() -> ProviderRegistry:
     """The registry the service starts with.
 
     The offline rules baseline is always available. The optional hosted
-    providers (Cloudflare Jev, Groq, Cerebras) are always registered too, but report
-    themselves unavailable until their credentials are configured, so a
+    providers (direct TypeSafe Jev, Cloudflare Jev, Groq, Cerebras) are always
+    registered too, but report themselves unavailable until their credentials are configured, so a
     checkout without credentials keeps working with the offline default.
     """
     registry = ProviderRegistry()
     registry.register(RulesProvider())
-    for provider_type in (CloudflareJevProvider, GroqProvider, CerebrasProvider):
+    for provider_type in (
+        TypeSafeJevProvider,
+        CloudflareJevProvider,
+        GroqProvider,
+        CerebrasProvider,
+    ):
         _register_optional(registry, provider_type)
     return registry
 
 
 def _register_optional(
     registry: ProviderRegistry,
-    provider_type: type[CloudflareJevProvider] | type[GroqProvider] | type[CerebrasProvider],
+    provider_type: (
+        type[TypeSafeJevProvider]
+        | type[CloudflareJevProvider]
+        | type[GroqProvider]
+        | type[CerebrasProvider]
+    ),
 ) -> None:
     """Register an environment-configured provider without letting it stop startup.
 
