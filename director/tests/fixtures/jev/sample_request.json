@@ -167,45 +167,22 @@
           "3": "A junction with three new branches."
         }
       },
-      "tag_dark": {
-        "type": "noul",
-        "instructions": "The new room fits this description: This room is dark, hindering sight. Judge it against `state.recent_rooms` and `state.depth` for variety."
-      },
-      "tag_flooded": {
-        "type": "noul",
-        "instructions": "The new room fits this description: This room is partly flooded with water. Judge it against `state.recent_rooms` and `state.depth` for variety."
-      },
-      "tag_fungal": {
-        "type": "noul",
-        "instructions": "The new room fits this description: Fungal growth spreads across this room. Judge it against `state.recent_rooms` and `state.depth` for variety."
-      },
-      "tag_icy": {
-        "type": "noul",
-        "instructions": "The new room fits this description: This room is freezing and slick with ice. Judge it against `state.recent_rooms` and `state.depth` for variety."
-      },
-      "tag_hot": {
-        "type": "noul",
-        "instructions": "The new room fits this description: This room is hot: steam, embers, or geothermal heat. Judge it against `state.recent_rooms` and `state.depth` for variety."
-      },
-      "tag_ruined": {
-        "type": "noul",
-        "instructions": "The new room fits this description: This room is collapsed or ruined masonry. Judge it against `state.recent_rooms` and `state.depth` for variety."
-      },
-      "tag_hallowed": {
-        "type": "noul",
-        "instructions": "The new room fits this description: This room is consecrated and calm. Judge it against `state.recent_rooms` and `state.depth` for variety."
-      },
-      "tag_trapped": {
-        "type": "noul",
-        "instructions": "The new room fits this description: This room conceals mechanical or magical traps. Judge it against `state.recent_rooms` and `state.depth` for variety."
-      },
-      "tag_overgrown": {
-        "type": "noul",
-        "instructions": "The new room fits this description: Roots and strange plants overgrow this room. Judge it against `state.recent_rooms` and `state.depth` for variety."
-      },
-      "tag_noisy": {
-        "type": "noul",
-        "instructions": "The new room fits this description: This room drones with unsettling noise. Judge it against `state.recent_rooms` and `state.depth` for variety."
+      "atmosphere": {
+        "type": "choice",
+        "instructions": "Which single environmental motif best gives this room a distinct identity? Prefer `none` when no motif strongly fits; use `state.recent_rooms` and `state.depth` to avoid repetition.",
+        "criteria": {
+          "none": "No single environmental motif should dominate this room.",
+          "dark": "This room is dark, hindering sight.",
+          "flooded": "This room is partly flooded with water.",
+          "fungal": "Fungal growth spreads across this room.",
+          "icy": "This room is freezing and slick with ice.",
+          "hot": "This room is hot: steam, embers, or geothermal heat.",
+          "ruined": "This room is collapsed or ruined masonry.",
+          "hallowed": "This room is consecrated and calm.",
+          "trapped": "This room conceals mechanical or magical traps.",
+          "overgrown": "Roots and strange plants overgrow this room.",
+          "noisy": "This room drones with unsettling noise."
+        }
       }
     }
   }

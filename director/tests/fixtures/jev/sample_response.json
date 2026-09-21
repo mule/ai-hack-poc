@@ -59,7 +59,13 @@
           "3": "Heavy: frequent enemies.",
           "4": "Teeming: enemies at every turn."
         },
-        "probabilities": { "0": 0.18, "1": 0.61, "2": 0.17, "3": 0.03, "4": 0.01 }
+        "probabilities": {
+          "0": 0.18,
+          "1": 0.61,
+          "2": 0.17,
+          "3": 0.03,
+          "4": 0.01
+        }
       },
       "loot_density": {
         "type": "score",
@@ -72,7 +78,13 @@
           "3": "Rich: worthwhile finds.",
           "4": "Treasure trove: exceptional loot."
         },
-        "probabilities": { "0": 0.04, "1": 0.24, "2": 0.6, "3": 0.1, "4": 0.02 }
+        "probabilities": {
+          "0": 0.04,
+          "1": 0.24,
+          "2": 0.6,
+          "3": 0.1,
+          "4": 0.02
+        }
       },
       "has_secret": {
         "type": "noul",
@@ -82,18 +94,31 @@
         "type": "choice",
         "choice": "1",
         "confidence": 0.73,
-        "probabilities": { "0": 0.14, "1": 0.68, "2": 0.16, "3": 0.02 }
+        "probabilities": {
+          "0": 0.14,
+          "1": 0.68,
+          "2": 0.16,
+          "3": 0.02
+        }
       },
-      "tag_dark": { "type": "noul", "noul": 0.72 },
-      "tag_flooded": { "type": "noul", "noul": 0.08 },
-      "tag_fungal": { "type": "noul", "noul": 0.33 },
-      "tag_icy": { "type": "noul", "noul": 0.42 },
-      "tag_hot": { "type": "noul", "noul": 0.31 },
-      "tag_ruined": { "type": "noul", "noul": 0.47 },
-      "tag_hallowed": { "type": "noul", "noul": 0.12 },
-      "tag_trapped": { "type": "noul", "noul": 0.28 },
-      "tag_overgrown": { "type": "noul", "noul": 0.19 },
-      "tag_noisy": { "type": "noul", "noul": 0.11 }
+      "atmosphere": {
+        "type": "choice",
+        "choice": "dark",
+        "confidence": 0.72,
+        "probabilities": {
+          "none": 0.1,
+          "dark": 0.45,
+          "flooded": 0.05,
+          "fungal": 0.1,
+          "icy": 0.04,
+          "hot": 0.04,
+          "ruined": 0.08,
+          "hallowed": 0.06,
+          "trapped": 0.04,
+          "overgrown": 0.02,
+          "noisy": 0.02
+        }
+      }
     },
     "usage": {
       "input_tokens": 642,

@@ -248,6 +248,18 @@ def test_selection_uses_environment_model_and_explicit_override():
         resolve_selection("groq", {"GROQ_MAX_COMPLETION_TOKENS": "many"})
 
 
+def test_direct_typesafe_selection_uses_the_stable_alias_and_withholds_its_key():
+    selection = resolve_selection("typesafe-jev", {"TYPESAFE_API_KEY": "ts_test_key"})
+
+    assert selection.model == "jev-latest"
+    assert selection.config.model == "jev-latest"
+    described = describe_config(selection.config)
+    assert described["credentials_present"] is True
+    assert described["withheld"] == ["api_key"]
+    assert "ts_test_key" not in json.dumps(described)
+    check_usable(selection)
+
+
 def test_unconfigured_hosted_provider_is_not_usable():
     with pytest.raises(SelectionError, match="not usable"):
         check_usable(resolve_selection("groq", {}))

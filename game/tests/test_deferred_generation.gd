@@ -46,7 +46,9 @@ func _run() -> void:
 	await _step("test_urgent_frontier_bypasses_prefetch_limit", _test_urgent_frontier_bypasses_prefetch_limit)
 	await _step("test_run_and_request_ids_change_across_restarts", _test_run_and_request_ids_change_across_restarts)
 	await _step("test_async_non_blocking_and_no_early_mutation", _test_async_non_blocking_and_no_early_mutation)
+	await _step("test_pending_open_door_blocks_entry_until_commit", _test_pending_open_door_blocks_entry_until_commit)
 	await _step("test_success_commit_and_duplicate_completion", _test_success_commit_and_duplicate_completion)
+	await _step("test_duplicate_provider_room_id_is_rewritten", _test_duplicate_provider_room_id_is_rewritten)
 	await _step("test_timeout_fallback_and_late_response", _test_timeout_fallback_and_late_response)
 	await _step("test_transport_failure_fallback", _test_transport_failure_fallback)
 	await _step("test_invalid_and_contradictory_responses_fall_back", _test_invalid_and_contradictory_responses_fall_back)
@@ -282,6 +284,26 @@ func _test_async_non_blocking_and_no_early_mutation() -> void:
 	_end()
 
 
+func _test_pending_open_door_blocks_entry_until_commit() -> void:
+	print("\nTest: an opened frontier stays impassable until its room commits")
+	var env := _env()
+	var request := _request_north(env)
+	env.state.enemies.clear()
+	env.state.player_pos = Vector2i(4, 1)
+	_check(env.state.player_action_step(Vector2i.UP), "first action opens the frontier door")
+	_check_eq(env.state.get_tile(Vector2i(4, 0)), TileType.DOOR_OPEN, "frontier door is visibly open")
+	var turns_after_open: int = env.state.player_turns
+	_check(not env.state.player_action_step(Vector2i.UP), "player cannot enter an unresolved doorway")
+	_check_eq(env.state.player_pos, Vector2i(4, 1), "player remains on committed floor")
+	_check_eq(env.state.player_turns, turns_after_open, "waiting for generation does not consume a turn")
+
+	var plan := StubDirector.simple_plan(request, "r-ready", "small", ["east"])
+	env.transport.deliver(0, StubDirector.success_result(request, plan))
+	_check(env.state.player_action_step(Vector2i.UP), "door becomes traversable after room commit")
+	_check_eq(env.state.player_pos, Vector2i(4, 0), "player steps onto the committed doorway")
+	_end()
+
+
 func _test_success_commit_and_duplicate_completion() -> void:
 	print("\nTest: director room commits permanently; duplicate/contradictory completions are ignored")
 	var env := _env()
@@ -311,6 +333,23 @@ func _test_success_commit_and_duplicate_completion() -> void:
 	env.state.player_pos = Vector2i(2, 5)
 	env.coord.update()
 	_check_eq(env.state.world.tiles, before.tiles, "committed tiles unchanged after leaving")
+	_end()
+
+
+func _test_duplicate_provider_room_id_is_rewritten() -> void:
+	print("\nTest: a repeated provider room id gets a unique local identity")
+	var env := _env()
+	var request := _request_north(env)
+	var plan := StubDirector.simple_plan(request, "r-000", "small", ["east"])
+	env.transport.deliver(0, StubDirector.success_result(request, plan))
+	var world: DungeonWorld = env.state.world
+	var room_id: String = world.get_frontier(NORTH).resolved_room_id
+	_check(room_id != "r-000" and room_id.begins_with("r-000-"), "duplicate id is rewritten deterministically")
+	_check_eq(world.rooms[room_id].source, "director", "valid director plan commits without fallback")
+	_check_eq(world.rooms[room_id].meta.provider_room_id, "r-000", "original provider id is retained in metadata")
+	_check_eq(world.rooms[room_id].meta.room_id_rewritten, true, "rewrite is visible in diagnostics")
+	_check_eq(world.counters.fallbacks, 0, "duplicate id does not trigger fallback")
+	_check(world.integrity_violations().is_empty(), "rewritten room preserves world integrity")
 	_end()
 
 
@@ -367,7 +406,6 @@ func _test_invalid_and_contradictory_responses_fall_back() -> void:
 		["run_id_mismatch", func(req): var other: Dictionary = req.duplicate(); other.run_id = "run-other"; return StubDirector.success_result(other, StubDirector.simple_plan(req, "r-1", "small")), "response_mismatch"],
 		["missing_backlink", func(req): var p := StubDirector.simple_plan(req, "r-1", "small"); p.exits = [StubDirector.exit_def("east"), StubDirector.exit_def("west")]; return StubDirector.success_result(req, p), "plan_rejected"],
 		["depth_mismatch", func(req): var p := StubDirector.simple_plan(req, "r-1", "small"); p.depth = 4; return StubDirector.success_result(req, p), "plan_rejected"],
-		["duplicate_room_id", func(req): return StubDirector.success_result(req, StubDirector.simple_plan(req, "r-000", "small")), "plan_rejected"],
 		["empty_body", func(req): return StubDirector.ok_result(""), "invalid_response"],
 	]
 	for case in cases:

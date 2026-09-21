@@ -1,7 +1,7 @@
 """Replay benchmark CLI and execution engine for dungeon generation (issue #14).
 
 Replays recorded canonical generation events against selected director providers
-(rules-baseline, cloudflare-jev, groq, cerebras) via DirectorService.
+(rules-baseline, typesafe-jev, cloudflare-jev, groq, cerebras) via DirectorService.
 """
 
 from __future__ import annotations

@@ -54,6 +54,8 @@ func _run_all_tests() -> void:
 	_test_parsed_room_plan_data_path()
 	_test_all_room_sizes()
 	_test_all_room_archetypes()
+	_test_archetype_shapes_are_distinct()
+	_test_standard_room_shape_varies_by_seed()
 	_test_exit_connectivity_and_direction()
 	_test_simultaneous_up_and_down_stairs()
 	_test_collision_and_spawn_safety()
@@ -216,6 +218,44 @@ func _test_all_room_archetypes() -> void:
 		_assert_true(_verify_connectivity(room), "Archetype %s is fully navigable" % rtype)
 		if rtype in ["entrance", "shop", "stairs_up", "shrine"]:
 			_assert_eq(room.enemies.size(), 0, "Peaceful archetype %s has no enemies" % rtype)
+	_end()
+
+
+func _test_archetype_shapes_are_distinct() -> void:
+	_begin("Archetype silhouette variety")
+	var seen: Dictionary = {}
+	for rtype in ["room", "chamber", "vault", "shrine", "treasure", "shop", "stairs_down"]:
+		var plan := {
+			"room_id": "shape-" + rtype,
+			"depth": 2,
+			"room_type": rtype,
+			"size": "medium",
+			"exits": [
+				{"direction": "north", "kind": "door"},
+				{"direction": "south", "kind": "door"}
+			]
+		}
+		var room := RoomGenerator.generate(plan, 888)
+		var signature := _walkable_shape_signature(room)
+		_assert_true(not seen.has(signature), "%s has a distinct walkable silhouette" % rtype)
+		seen[signature] = rtype
+	_end()
+
+
+func _test_standard_room_shape_varies_by_seed() -> void:
+	_begin("Standard room seed variety")
+	var plan := {
+		"room_id": "seeded-room-shape",
+		"depth": 2,
+		"room_type": "room",
+		"size": "small",
+		"exits": [{"direction": "north", "kind": "door"}]
+	}
+	var signatures: Dictionary = {}
+	for seed_value in range(1, 17):
+		var room := RoomGenerator.generate(plan, seed_value)
+		signatures[_walkable_shape_signature(room)] = true
+	_assert_true(signatures.size() > 1, "Small standard rooms vary their geometry across seeds")
 	_end()
 
 # 7. Exit connectivity & direction
@@ -609,6 +649,14 @@ func _shuffle_packed_strings(arr: PackedStringArray, rng: RandomNumberGenerator)
 		var tmp := arr[i]
 		arr[i] = arr[j]
 		arr[j] = tmp
+
+
+func _walkable_shape_signature(room: GeneratedRoom) -> String:
+	var signature := ""
+	for y in range(room.height):
+		for x in range(room.width):
+			signature += "#" if room.get_tile(Vector2i(x, y)) == GeneratedRoom.TileType.WALL else "."
+	return signature
 
 
 ## Utility: Verifies that all FLOOR and EXIT tiles form a single connected component

@@ -33,41 +33,43 @@
     "resources": {
       "enemies": {
         "by_type": {
-          "goblin": 25
+          "goblin": 22
         },
-        "total": 25
+        "total": 22
       },
       "enemies_per_room_histogram": {
         "0": 1,
         "1": 3,
         "2": 6,
-        "5": 2
+        "3": 1,
+        "4": 1
       },
       "items": {
         "by_type": {
-          "potion_health": 26,
-          "sword_upgrade": 11
+          "potion_health": 22,
+          "sword_upgrade": 7
         },
-        "total": 37
+        "total": 29
       },
       "items_per_room_histogram": {
         "1": 3,
-        "3": 6,
+        "2": 4,
+        "3": 3,
         "4": 1,
-        "6": 2
+        "5": 1
       },
       "per_room": {
         "enemies": {
-          "max": 5,
-          "mean": 2.0833,
+          "max": 4,
+          "mean": 1.8333,
           "min": 0,
-          "stdev": 1.441
+          "stdev": 0.986
         },
         "items": {
-          "max": 6,
-          "mean": 3.0833,
+          "max": 5,
+          "mean": 2.4167,
           "min": 1,
-          "stdev": 1.6051
+          "stdev": 1.1873
         }
       },
       "rooms_without_enemies": 1,
@@ -162,41 +164,43 @@
       "resources": {
         "enemies": {
           "by_type": {
-            "goblin": 25
+            "goblin": 22
           },
-          "total": 25
+          "total": 22
         },
         "enemies_per_room_histogram": {
           "0": 1,
           "1": 3,
           "2": 6,
-          "5": 2
+          "3": 1,
+          "4": 1
         },
         "items": {
           "by_type": {
-            "potion_health": 26,
-            "sword_upgrade": 11
+            "potion_health": 22,
+            "sword_upgrade": 7
           },
-          "total": 37
+          "total": 29
         },
         "items_per_room_histogram": {
           "1": 3,
-          "3": 6,
+          "2": 4,
+          "3": 3,
           "4": 1,
-          "6": 2
+          "5": 1
         },
         "per_room": {
           "enemies": {
-            "max": 5,
-            "mean": 2.0833,
+            "max": 4,
+            "mean": 1.8333,
             "min": 0,
-            "stdev": 1.441
+            "stdev": 0.986
           },
           "items": {
-            "max": 6,
-            "mean": 3.0833,
+            "max": 5,
+            "mean": 2.4167,
             "min": 1,
-            "stdev": 1.6051
+            "stdev": 1.1873
           }
         },
         "rooms_without_enemies": 1,

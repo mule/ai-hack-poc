@@ -36,8 +36,16 @@ def test_default_registry_offers_rules_plus_unconfigured_optional_providers(monk
 
     described = {d.id: d for d in registry.describe()}
 
-    assert set(described) == {"rules-baseline", "cloudflare-jev", "groq", "cerebras"}
+    assert set(described) == {
+        "rules-baseline",
+        "typesafe-jev",
+        "cloudflare-jev",
+        "groq",
+        "cerebras",
+    }
     assert described["rules-baseline"].available is True
+    assert described["typesafe-jev"].available is False
+    assert described["typesafe-jev"].default_model == "jev-latest"
     assert described["cloudflare-jev"].available is False
     assert described["groq"].available is False
     assert described["groq"].default_model == "openai/gpt-oss-20b"

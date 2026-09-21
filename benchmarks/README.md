@@ -17,7 +17,7 @@ replay shape, so `benchmarks.summarize` reads them directly.
 ## Architecture & Guarantees
 
 - **Director-native evaluation:** Benchmarks evaluate requests strictly through `DirectorService.generate()`. They never call provider endpoints directly, ensuring that identical contract validation (`RoomPlan`), timeouts, error classification, and adapter logic are applied.
-- **Offline safety:** Runs 100% offline out-of-the-box using the deterministic `rules-baseline` provider or mocked transports in tests. Hosted providers (`cloudflare-jev`, `groq`, `cerebras`) activate automatically when credentials exist in the environment or director settings.
+- **Offline safety:** Runs 100% offline out-of-the-box using the deterministic `rules-baseline` provider or mocked transports in tests. Hosted providers (`typesafe-jev`, `cloudflare-jev`, `groq`, `cerebras`) activate automatically when credentials exist in the environment or director settings.
 - **Telemetry preservation:** Metrics capture raw latencies, percentile distributions (p50, p90, p95, p99), token usage, estimated costs, and classified failure reasons (`schema_violation`, `provider_timeout`, `rate_limited`, `provider_error`).
 - **Machine-readable outputs:** Results can be saved to `.json` or `.jsonl` formats or piped directly to other data pipelines.
 - **Summaries:** `python -m benchmarks.summarize` (`make benchmark-summary`) turns replay results into per-provider, per-model comparisons. See [Summaries](#summaries-provider-and-model-comparison).
@@ -76,7 +76,7 @@ director/.venv/bin/python -m benchmarks.replay --input benchmarks/fixtures/sampl
 | --- | --- | --- | --- |
 | `--input`, `-i` | `<path>` | **Required.** Path to JSON or JSONL file containing recorded generation requests or events. | |
 | `--output`, `-o` | `<path>` | Path to save machine-readable report (`.json` or `.jsonl`). Prints JSON to stdout if omitted. | `None` (stdout) |
-| `--providers`, `-p` | `<list>` | Providers to evaluate: `rules-baseline`, `cloudflare-jev`, `groq`, `cerebras`. | `rules-baseline` |
+| `--providers`, `-p` | `<list>` | Providers to evaluate: `rules-baseline`, `typesafe-jev`, `cloudflare-jev`, `groq`, `cerebras`. | `rules-baseline` |
 | `--models`, `-m` | `<list>` | Model overrides in `provider:model` format (e.g. `groq:openai/gpt-oss-120b`). Repeat a provider to replay several of its models; each is reported separately. | Provider defaults |
 | `--iterations`, `-n` | `<int>` | Number of iterations per request per provider. | `1` |
 | `--concurrency`, `-c` | `<int>` | Maximum concurrent in-flight requests. | `2` |

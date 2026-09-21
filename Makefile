@@ -183,9 +183,9 @@ eval-offline: eval-corpus-verify ## Offline fixed-corpus protocol on rules-basel
 	@$(VENV_BIN)/python -m benchmarks.evaluation run --corpus $(EVAL_CORPUS) --tier $(EVAL_TIER) \
 		--select rules-baseline --label offline-reproduction $(if $(EVAL_OUT),--out $(EVAL_OUT)) $(EVAL_ARGS)
 
-eval-live: need-venv ## LIVE, BILLABLE: compare hosted providers. Needs EVAL_LIVE=1 EVAL_SELECT='groq cerebras'
-	@test "$(EVAL_LIVE)" = "1" || { echo "refusing: this makes billable calls to hosted providers. Re-run with EVAL_LIVE=1 EVAL_SELECT='groq cerebras' (credentials in the environment)"; exit 1; }
-	@test -n "$(EVAL_SELECT)" || { echo "EVAL_SELECT is empty: name providers, e.g. EVAL_SELECT='groq cerebras:qwen-3.8-27b'"; exit 1; }
+eval-live: need-venv ## LIVE, BILLABLE: compare hosted providers. Needs EVAL_LIVE=1 and EVAL_SELECT
+	@test "$(EVAL_LIVE)" = "1" || { echo "refusing: this makes billable calls to hosted providers. Re-run with EVAL_LIVE=1 EVAL_SELECT='typesafe-jev groq cerebras' (credentials in the environment)"; exit 1; }
+	@test -n "$(EVAL_SELECT)" || { echo "EVAL_SELECT is empty: name providers, e.g. EVAL_SELECT='typesafe-jev groq cerebras:qwen-3.8-27b'"; exit 1; }
 	@$(VENV_BIN)/python -m benchmarks.evaluation run --live --corpus $(EVAL_CORPUS) --tier $(EVAL_LIVE_TIER) \
 		--select $(EVAL_SELECT) $(if $(EVAL_OUT),--out $(EVAL_OUT)) $(EVAL_ARGS)
 
