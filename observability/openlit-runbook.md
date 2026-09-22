@@ -131,3 +131,51 @@ emission and correlation. A sentinel is injected into the generation prompt and
 must be absent from every exported body. Separate negative checks withhold each
 persisted signal and require a nonzero outcome; backend error text containing a
 sentinel must not appear in error evidence.
+
+## Actual headless game lifecycle
+
+This additional harness runs real Godot `GameState`, `GenerationCoordinator`,
+HTTP generation client, and HTTP telemetry sink. It opens a generated door and
+walks into the new room. It starts its own rules-only director on loopback port
+18000; an occupied port fails instead of using or stopping an existing server.
+There are no hosted model calls and Godot receives no provider or OTLP secrets.
+
+After exporting the OTLP/service settings above:
+
+```sh
+PYTHONPATH=director director/.venv/bin/python -m benchmarks.game_openlit_smoke \
+  --godot godot --port 18000 > /tmp/openlit-game-smoke.json
+```
+
+Use `--game-project /path/to/checkout/game` to test a separate game worktree, or
+`--port 0` to allocate an unused loopback port. The harness imports Godot classes,
+uses a unique `game-smoke-*` run ID, allows 20 seconds for game completion, waits
+for HTTP batch acknowledgements, flushes exporters, then stops only its own
+server. Failed batches, dropped events, fallback generation, script errors,
+and failure to enter the generated room fail the command.
+
+Exit 2 means `game_delivered_unverified`: the real game reached the director
+bridge, but persisted remote rows still require verification. JSON includes
+separate harness/game Git identities, service identity, model, room, and run ID.
+In OpenLIT, filter `director.run_id` to this exact run and confirm:
+
+- `director.generate` and `game.lifecycle` spans for the same request ID.
+- Lifecycle logs including `generation.sent`, `generation.response_received`,
+  `room.committed`, `door.revealed`, and `room.entered`.
+- `game.lifecycle.events`, `game.rooms.committed`, and `game.lifecycle.duration`
+  metrics under resource `service.instance.id` equal to the run ID.
+
+The game and director correlate by run/request IDs; game events do not claim
+W3C parent linkage unless a real propagated context exists. Save authenticated
+query/UI evidence alongside the JSON rather than treating local HTTP delivery
+as proof of remote persistence.
+
+The focused integration test uses a loopback OTLP collector and decodes actual
+protobuf output. It runs when Godot and the game telemetry implementation are
+available:
+
+```sh
+PYTHONPATH=director:. director/.venv/bin/pytest director/tests/test_game_openlit_smoke.py -q
+```
+
+Set `OPENLIT_GAME_TEST_PROJECT` when testing another game worktree.

@@ -45,9 +45,9 @@ def evidence_label(value: object) -> str:
     return value
 
 
-def build_identity() -> dict[str, object]:
+def build_identity(root: Path | None = None) -> dict[str, object]:
     """Read this checkout identity; never include command stderr or file names."""
-    root = Path(__file__).resolve().parents[1]
+    root = root if root is not None else Path(__file__).resolve().parents[1]
     try:
         revision = subprocess.run(
             ["git", "rev-parse", "HEAD"],
