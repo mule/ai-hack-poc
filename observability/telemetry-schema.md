@@ -30,9 +30,19 @@ attribute registry, and the metric-dimension guard. It does not modify
   existing Godot⟷director `GenerationRequest`/`GenerationResponse` contract,
   unrelated to `SCHEMA_VERSION` but sharing the same "reject on major
   mismatch" philosophy.
-* Resource attribute `service.version` (§4) is set to `CONTRACT_VERSION` on
-  every component, so an OpenLIT dashboard can detect an incompatible
-  producer/consumer pair without parsing span payloads.
+* **Three independent version axes, not one.** `service.version` (§4) is
+  the deployable component's own build/release version — prefer an actual
+  build identifier (a package version, a git SHA) when the component has
+  one; `CONTRACT_VERSION` is only a fallback for a component with no build
+  version of its own. `telemetry.schema.version` (§4,
+  `TELEMETRY_SCHEMA_VERSION_ATTRIBUTE`) is `SCHEMA_VERSION` — *this*
+  module's event/attribute contract. `CONTRACT_VERSION` on its own is the
+  room-plan contract. None of the three imply each other: a build can ship
+  with an unchanged room-plan contract but a new telemetry schema, or vice
+  versa. Conflating `service.version` with the telemetry schema version
+  (an earlier draft of this contract did) means a schema change is
+  invisible to a dashboard watching `service.version` alone — hence the
+  separate attribute.
 * Bumping `SCHEMA_VERSION` (game event names/required fields/attribute
   registry) or `CONTRACT_VERSION` (the room-plan contract) is a breaking
   change: document the migration path in this file's changelog (§10) before
@@ -122,7 +132,10 @@ POST /v1/telemetry/game
   Attach it whenever the game has an active trace context for the
   generation (e.g. one propagated from the director's response), so the
   bridge can link the game event to `director.generate` instead of relying
-  on `run_id`/`request_id` correlation alone.
+  on `run_id`/`request_id` correlation alone. Validated against the full
+  spec, not just the `version-traceid-spanid-flags` shape: the reserved
+  version `ff` and an all-zero trace-id or parent-id are rejected, matching
+  the reference W3C parser (a real tracer never emits any of the three).
 * `attributes`: at most 16 keys, allowlisted per `event_name` (§3.2). Any
   other key, or a value of the wrong type/shape/range, fails validation on
   `GameEvent`; `sanitize_attributes()` performs the same check but drops
@@ -160,6 +173,17 @@ Every attribute key this schema knows, its type, and its cardinality class
 — a histogram *value*, never a dimension either, since a continuous float
 cannot be a bounded label.
 
+Every `id` value is additionally checked against the secret/URL guard
+below (an id's character class alone doesn't rule out a leaked token —
+`sk-live-...` matches `BoundedId` character-for-character); every `string`
+value is checked against both the guard and the director's own
+`dungeon_director.providers.MODEL_ID_RE` provider/model identifier
+grammar (reused rather than redefined so the two never drift apart);
+every `float` value must be finite (`math.isfinite`) and is converted
+inside a guard that catches `OverflowError` (an out-of-range Python int,
+e.g. `10**1000`, cannot become a `float` at all) so a pathological input
+is dropped, never raised.
+
 | Key | Type | Cardinality | Allowed values / range |
 |---|---|---|---|
 | `frontier_id` | id | correlation | `^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$` — game-composed as `<room_id>:<direction>` (e.g. `r-000:east`), so unlike every other id here it allows a colon and runs to 128 chars, not 64 |
@@ -171,21 +195,21 @@ cannot be a bounded label.
 | `exit_direction` | enum | low | `north\|south\|east\|west\|up\|down` (`ExitDirection`) |
 | `room_type` | enum | low | `RoomType` values (`entrance`, `room`, `corridor`, ...) |
 | `room_size` | enum | low | `RoomSize` values (`tiny`…`huge`) |
-| `provider` | string | low | label-shaped, ≤128 chars, no secret-shaped text |
-| `model` | string | low | label-shaped, ≤128 chars, no secret-shaped text |
+| `provider` | string | low | `dungeon_director.providers.MODEL_ID_RE`-shaped (≤128 chars; allows `/`, `:`, `@` — e.g. `typesafe/jev`, `@cf/meta/llama-3.1-8b-instruct`), no secret-shaped text, no URL scheme (`scheme://…`, which is how a credential-bearing URL like `https://user:pass@host` was slipping through an earlier draft) |
+| `model` | string | low | same grammar as `provider` |
 | `normalize_reason` | enum | low | `danger_clamped\|room_type_forbidden\|exit_conflict\|exit_direction_reassigned\|secret_probability_clamped\|exit_pruned` |
 | `reject_reason` | enum | low | `schema_invalid\|policy_violation\|empty_room\|duplicate_room_id\|placement_failure` |
 | `fallback_reason` | enum | low | `provider_error\|provider_timeout\|schema_error\|selection_error\|rejected_by_game\|transport_failure` |
 | `execution_mode` | enum | low | `active\|shadow\|replay` |
 | `exit_count` | int | low | 0–8 (matches `RoomPlan.exits` max length) |
 | `has_secret` | bool | low | — |
-| `enemy_density` | float | measurement | 0.0–1.0 (`UnitFloat`, matches `RoomPlan.enemy_density`) |
-| `loot_density` | float | measurement | 0.0–1.0 (`UnitFloat`, matches `RoomPlan.loot_density`) |
-| `queue_ms` | float | measurement | 0–3,600,000 — time the request sat queued before being sent |
-| `network_ms` | float | measurement | 0–3,600,000 — round trip observed by the game |
-| `materialization_ms` | float | measurement | 0–3,600,000 — time to write the room into dungeon state |
-| `time_to_visible_ms` | float | measurement | 0–3,600,000 — commit to reveal |
-| `time_to_entry_ms` | float | measurement | 0–3,600,000 — reveal (or commit) to player entry |
+| `enemy_density` | float | measurement | 0.0–1.0, finite (`UnitFloat`, matches `RoomPlan.enemy_density`) |
+| `loot_density` | float | measurement | 0.0–1.0, finite (`UnitFloat`, matches `RoomPlan.loot_density`) |
+| `queue_ms` | float | measurement | 0–3,600,000, finite — time the request sat queued before being sent |
+| `network_ms` | float | measurement | 0–3,600,000, finite — round trip observed by the game |
+| `materialization_ms` | float | measurement | 0–3,600,000, finite — time to write the room into dungeon state |
+| `time_to_visible_ms` | float | measurement | 0–3,600,000, finite — commit to reveal |
+| `time_to_entry_ms` | float | measurement | 0–3,600,000, finite — reveal (or commit) to player entry |
 
 `duplicate_room_id` and `placement_failure` are blocking failures the game
 cannot adjust its way out of, so they reject the room outright (followed by
@@ -220,7 +244,8 @@ Set once per process/component, not per span:
 |---|---|---|
 | `service.name` | `dungeon-director` (director, unchanged default), `dungeon-director-game-bridge` (the future `/v1/telemetry/game` bridge), `dungeon-director-benchmark` (benchmark/replay tooling) | Existing director default is unchanged; new components get their own name rather than a shared `director.component` key. |
 | `service.namespace` | `dungeon-director` | Groups all three under one system in OpenLIT's service map. |
-| `service.version` | `dungeon_director.contracts.CONTRACT_VERSION` (currently `1.0.0`) | Same value on every component; the mechanism behind "dashboards can detect incompatible telemetry" (issue #22 acceptance criteria). |
+| `service.version` | The component's own build/release version (a package version, a git SHA — operator/CI-set) when it has one; `dungeon_director.contracts.CONTRACT_VERSION` (currently `1.0.0`) only as a fallback for a component with no build version | Standard OTel semantics: the *deployable's* version, not this telemetry contract's. Do not use it as the mechanism for detecting a telemetry schema change — see `telemetry.schema.version` below and §1. |
+| `telemetry.schema.version` | `telemetry_schema.SCHEMA_VERSION` (`TELEMETRY_SCHEMA_VERSION_ATTRIBUTE`, currently `"1"`) | Same value on every component that emits `GameEvent`s or director spans under this contract. This is the mechanism behind "dashboards can detect incompatible telemetry" (issue #22 acceptance criteria) — not `service.version`, which tracks something else entirely (§1). |
 | `deployment.environment` | operator-set string (e.g. `dev`/`staging`/`prod`) | Not currently sourced from anywhere; a new setting either way (#23). |
 
 ## 5. Correlation rules
@@ -395,6 +420,34 @@ Provider ids from `dungeon_director/{rules,groq,cerebras,typesafe_jev,cloudflare
   reason codes; and added `provider`/`model` to `room.committed` and
   `room.entered` for funnel attribution. No `schema_version` bump was
   needed — v1 had not shipped to a producer yet.
+* **v1, security fixes (same `schema_version="1"`)** — a code review of PR
+  #29 found four defects, all fixed in the same PR before merge, no
+  `SCHEMA_VERSION` bump needed (attribute shapes got stricter, not
+  incompatible): (1) `provider`/`model` used a permissive label pattern
+  that a full URL with embedded credentials
+  (`https://user:secret@example.com/path`) matched character-for-character
+  — fixed by switching to the director's `MODEL_ID_RE` grammar plus an
+  explicit ban on a URL scheme (`scheme://`), without banning the bare
+  `/`/`:`/`@` real model ids use; (2) a secret-shaped `room_id` (e.g.
+  `sk-live-...`) passed because an id's character class alone doesn't rule
+  out a leaked token — fixed by running the same secret-shape guard on
+  every `id`-typed value, not just `string`; (3) `enemy_density=NaN`
+  passed because every comparison against `NaN` is `False`, so the old
+  range check silently accepted it — fixed with an explicit
+  `math.isfinite` check before the range check; (4)
+  `sanitize_attributes(..., {"enemy_density": 10**1000})` raised
+  `OverflowError` from `float()`, breaking the documented never-raises
+  contract — fixed by catching it and dropping the value like any other
+  invalid input. Also fixed: the `traceparent` regex accepted an all-zero
+  trace-id, an all-zero parent-id, and the reserved version `ff`, all
+  invalid per the W3C Trace Context spec — `_valid_traceparent()` now
+  checks the three semantic bans the reference parser enforces, not just
+  the shape. And `service.version` was corrected to mean the deployable's
+  own build/release version (§1/§4), with a new, separate
+  `telemetry.schema.version` resource attribute
+  (`TELEMETRY_SCHEMA_VERSION_ATTRIBUTE`) carrying `SCHEMA_VERSION` —
+  `service.version` alone cannot detect a telemetry schema change if the
+  build itself didn't change.
 
 [genai-semconv]: https://opentelemetry.io/docs/specs/semconv/gen-ai/
 [trace-context]: https://www.w3.org/TR/trace-context/

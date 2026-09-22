@@ -8,6 +8,7 @@ consumer (Godot, the exporter in #23, dashboards in #27).
 
 from __future__ import annotations
 
+import math
 from datetime import UTC, datetime
 
 import pytest
@@ -23,6 +24,7 @@ from dungeon_director.telemetry_schema import (
     MAX_EVENTS_PER_BATCH,
     MEASUREMENT_ONLY_KEYS,
     SCHEMA_VERSION,
+    TELEMETRY_SCHEMA_VERSION_ATTRIBUTE,
     GameEvent,
     GameEventBatch,
     GameEventName,
@@ -386,3 +388,131 @@ class TestRegistryConsistency:
         # namespaced apart.
         shared = GAME_METRIC_DIMENSIONS & DIRECTOR_METRIC_DIMENSIONS
         assert shared <= {"provider", "model", "execution_mode"}
+
+
+# --------------------------------------------------------------------------- regression: review
+
+
+class TestCredentialLeakRejection:
+    """A reviewer found ``model="https://user:secret@example.com/path"`` passing
+    ``GameEvent`` unchanged: the old label pattern allowed '/', ':' and '@', so a
+    full URL with embedded credentials matched it character-for-character.
+    """
+
+    def test_sanitize_drops_a_url_with_embedded_credentials(self) -> None:
+        result = sanitize_attributes(
+            GameEventName.GENERATION_ACCEPTED,
+            {"provider": "https://user:secret@example.com/path"},
+        )
+        assert result == {}
+
+    def test_game_event_rejects_a_url_shaped_model(self) -> None:
+        with pytest.raises(ValidationError):
+            GameEvent.model_validate(
+                _event(
+                    event_name=GameEventName.GENERATION_ACCEPTED.value,
+                    attributes={"model": "https://user:secret@example.com/path"},
+                )
+            )
+
+    def test_bare_userinfo_without_a_scheme_is_still_caught_by_the_secret_pattern(self) -> None:
+        # No "://" here, but "password=" is still secret-shaped.
+        result = sanitize_attributes(
+            GameEventName.GENERATION_ACCEPTED, {"provider": "password=hunter2"}
+        )
+        assert result == {}
+
+    @pytest.mark.parametrize("model_id", ["typesafe/jev", "@cf/meta/llama-3.1-8b-instruct", "groq"])
+    def test_legitimate_slash_and_at_sign_identifiers_still_pass(self, model_id: str) -> None:
+        # The fix must ban the URL *shape* (a scheme), not slash/colon/'@' on
+        # their own -- real model ids use all three.
+        result = sanitize_attributes(GameEventName.GENERATION_ACCEPTED, {"model": model_id})
+        assert result == {"model": model_id}
+
+
+class TestSecretShapedIdRejection:
+    """A reviewer found a secret-shaped room_id (matches BoundedId's character
+    class exactly) passing sanitize_attributes unchanged.
+    """
+
+    def test_sanitize_drops_a_secret_shaped_room_id(self) -> None:
+        result = sanitize_attributes(
+            GameEventName.ROOM_COMMITTED, {"room_id": "sk-live-secret0123456789"}
+        )
+        assert result == {}
+
+    def test_sanitize_still_keeps_an_ordinary_room_id(self) -> None:
+        result = sanitize_attributes(GameEventName.ROOM_COMMITTED, {"room_id": "room-1"})
+        assert result == {"room_id": "room-1"}
+
+
+class TestNonFiniteAndOverflowFloats:
+    """A reviewer found enemy_density=NaN passing (NaN fails every comparison,
+    so the old range check silently let it through), and
+    enemy_density=10**1000 raising OverflowError from float() -- breaking the
+    documented never-raises contract of sanitize_attributes.
+    """
+
+    def test_drops_nan(self) -> None:
+        result = sanitize_attributes(GameEventName.ROOM_COMMITTED, {"enemy_density": math.nan})
+        assert result == {}
+
+    def test_drops_positive_infinity(self) -> None:
+        result = sanitize_attributes(GameEventName.ROOM_COMMITTED, {"enemy_density": math.inf})
+        assert result == {}
+
+    def test_drops_negative_infinity(self) -> None:
+        result = sanitize_attributes(GameEventName.ROOM_COMMITTED, {"enemy_density": -math.inf})
+        assert result == {}
+
+    def test_never_raises_on_an_absurdly_large_int(self) -> None:
+        # float(10**1000) raises OverflowError; sanitize_attributes must not propagate it.
+        result = sanitize_attributes(GameEventName.ROOM_COMMITTED, {"enemy_density": 10**1000})
+        assert result == {}
+
+    def test_never_raises_on_an_absurdly_large_negative_int(self) -> None:
+        result = sanitize_attributes(GameEventName.ROOM_COMMITTED, {"enemy_density": -(10**1000)})
+        assert result == {}
+
+    def test_still_accepts_an_ordinary_finite_value(self) -> None:
+        result = sanitize_attributes(GameEventName.ROOM_COMMITTED, {"enemy_density": 0.4})
+        assert result == {"enemy_density": 0.4}
+
+
+class TestTraceparentSemanticValidation:
+    """A reviewer found the traceparent regex accepting an all-zero trace-id,
+    an all-zero parent-id, and the reserved version ``ff`` -- all invalid per
+    the W3C Trace Context spec (a real tracer never emits them).
+    """
+
+    def test_rejects_all_zero_trace_id(self) -> None:
+        with pytest.raises(ValidationError):
+            GameEvent.model_validate(
+                _event(traceparent="00-00000000000000000000000000000000-00f067aa0ba902b7-01")
+            )
+
+    def test_rejects_all_zero_parent_id(self) -> None:
+        with pytest.raises(ValidationError):
+            GameEvent.model_validate(
+                _event(traceparent="00-4bf92f3577b34da6a3ce929d0e0e4736-0000000000000000-01")
+            )
+
+    def test_rejects_reserved_version_ff(self) -> None:
+        with pytest.raises(ValidationError):
+            GameEvent.model_validate(
+                _event(traceparent="ff-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01")
+            )
+
+    def test_still_accepts_a_well_formed_traceparent(self) -> None:
+        event = GameEvent.model_validate(_event(traceparent=VALID_TRACEPARENT))
+        assert event.traceparent == VALID_TRACEPARENT
+
+
+class TestTelemetrySchemaVersionAttribute:
+    def test_is_distinct_from_the_generation_contract_version(self) -> None:
+        # telemetry.schema.version tracks this module's own event contract
+        # (SCHEMA_VERSION); it must not be confused with service.version,
+        # which (per telemetry-schema.md) tracks the deployable build or the
+        # Godot<->director room-plan CONTRACT_VERSION as a fallback -- a
+        # different axis of versioning entirely.
+        assert TELEMETRY_SCHEMA_VERSION_ATTRIBUTE == "telemetry.schema.version"
