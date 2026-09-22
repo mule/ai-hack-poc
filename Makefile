@@ -219,4 +219,4 @@ clean: ## Remove the director virtualenv, Python caches, and build output
 
 .PHONY: openlit-smoke
 openlit-smoke: need-venv ## Verify fresh traces/logs/metrics in OpenLIT; see observability/openlit-runbook.md
-	PYTHONPATH=director $(VENV_BIN)/python -m benchmarks.openlit_smoke $(SMOKE_ARGS)
+	@PYTHONPATH=director $(VENV_BIN)/python -m benchmarks.openlit_smoke $(SMOKE_ARGS)

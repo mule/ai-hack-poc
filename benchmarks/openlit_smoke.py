@@ -8,6 +8,7 @@ import json
 import logging
 import os
 import re
+import subprocess
 import threading
 import time
 import uuid
@@ -30,6 +31,45 @@ class SmokeError(Exception):
 class Sample:
     request_id: str
     provider: str
+    model: str
+
+
+def evidence_label(value: object) -> str:
+    """Expose only bounded identifiers, never credential-shaped configuration."""
+    if not isinstance(value, str) or not re.fullmatch(
+        r"[A-Za-z0-9][A-Za-z0-9_.:/+-]{0,127}", value
+    ):
+        return "unknown"
+    if "://" in value or re.search(r"(?i)(sk-|api[_-]?key|password|bearer)", value):
+        return "unknown"
+    return value
+
+
+def build_identity() -> dict[str, object]:
+    """Read this checkout identity; never include command stderr or file names."""
+    root = Path(__file__).resolve().parents[1]
+    try:
+        revision = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            cwd=root,
+            capture_output=True,
+            text=True,
+            check=True,
+            timeout=2,
+        ).stdout.strip()
+        status = subprocess.run(
+            ["git", "status", "--porcelain"],
+            cwd=root,
+            capture_output=True,
+            text=True,
+            check=True,
+            timeout=2,
+        ).stdout
+        if re.fullmatch(r"[0-9a-f]{40,64}", revision):
+            return {"revision": revision, "dirty": bool(status)}
+    except (OSError, subprocess.SubprocessError):
+        pass
+    return {"revision": "unknown", "dirty": None}
 
 
 class ClickHouseVerifier:
@@ -182,7 +222,13 @@ async def emit(telemetry: Any, providers: list[str], instance: str) -> list[Samp
                 )
             if not outcome.response.success:
                 raise SmokeError("generation_failed")
-            samples.append(Sample(request_id, provider))
+            samples.append(
+                Sample(
+                    request_id,
+                    evidence_label(outcome.response.metadata.provider),
+                    evidence_label(outcome.response.metadata.model),
+                )
+            )
     finally:
         await registry.aclose()
     return samples
@@ -224,8 +270,21 @@ def run(args: argparse.Namespace, env: dict[str, str]) -> tuple[int, dict[str, A
             {
                 "instance_id": instance,
                 "started_ms": started_ms,
+                "build": build_identity(),
+                "service_version": evidence_label(
+                    telemetry.describe().get("resource", {}).get("service.version")
+                ),
+                "environment": evidence_label(
+                    telemetry.describe()
+                    .get("resource", {})
+                    .get("deployment.environment")
+                ),
                 "samples": [
-                    {"request_id": s.request_id, "provider": s.provider}
+                    {
+                        "request_id": s.request_id,
+                        "provider": s.provider,
+                        "model": s.model,
+                    }
                     for s in samples
                 ],
             }

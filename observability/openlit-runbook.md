@@ -43,11 +43,17 @@ make openlit-smoke
 make openlit-smoke SMOKE_ARGS='--deadline 120'
 ```
 
-Exit 0 means all requested generations succeeded and all four persisted signal
+The underlying Python CLI returns exit 0 when all requested generations succeeded and all four persisted signal
 groups were found for this invocation. Exit 1 means configuration, generation,
 export setup, verification query/authentication, or ingestion failed. JSON
 `missing` lists exactly which signal groups were absent. The deadline bounds
 polling; in-flight HTTP queries and exporter cleanup have their own short bounds.
+
+GNU Make returns 2 for any failed recipe, so `make openlit-smoke` does not
+preserve the CLI distinction between exit 1 and exit 2. Read the JSON `status`
+and `error`, or invoke `PYTHONPATH=director director/.venv/bin/python -m
+benchmarks.openlit_smoke` directly when exact exit codes are needed. The Make
+recipe suppresses command echo so redirected stdout contains only JSON.
 
 Every invocation gets a fresh `service.instance.id` resource value. The
 request/run IDs are attributes on spans/logs only. The log must share the
@@ -65,7 +71,11 @@ make openlit-smoke SMOKE_ARGS='--emit-only' > /tmp/openlit-smoke.json
 
 **Exit 2 is intentional:** status is `emitted_unverified` and
 `ingestion_verified` is false. This is not end-to-end acceptance. The JSON includes
-a fresh instance ID, start time, and request IDs. In the authenticated OpenLIT
+a fresh instance ID, start time, request IDs, actual selected provider/model,
+service version, deployment environment, Git revision, and dirty-checkout flag.
+Only these bounded identity fields are included; arbitrary resource attributes,
+headers, and environment variables are not copied into evidence. A packaged
+checkout without Git metadata reports an unknown revision. In the authenticated OpenLIT
 Telemetry explorer, filter **ResourceAttributes → service.instance.id** to that
 value and use a time window covering the emitted timestamp:
 

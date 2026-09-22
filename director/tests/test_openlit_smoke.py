@@ -3,6 +3,9 @@
 import argparse
 import asyncio
 import json
+import os
+import subprocess
+from pathlib import Path
 
 import httpx
 import pytest
@@ -21,7 +24,7 @@ ENV = {
     "OPENLIT_SMOKE_CLICKHOUSE_USER": "explicit-test-user",
     "OPENLIT_SMOKE_CLICKHOUSE_PASSWORD": SECRET,
 }
-SAMPLE = smoke.Sample("smoke-request", "rules-baseline")
+SAMPLE = smoke.Sample("smoke-request", "rules-baseline", "rules-v1")
 
 
 def response_counts(missing=None):
@@ -46,6 +49,9 @@ def test_each_missing_signal_fails_acceptance(monkeypatch, missing):
 
     class Telemetry:
         enabled = True
+
+        def describe(self):
+            return {"resource": {"service.version": "1.2.3", "deployment.environment": "test"}}
 
         def flush(self, *args):
             pass
@@ -138,6 +144,8 @@ def test_emit_only_exports_real_correlated_signals_without_prompt_or_secret(monk
 
         monkeypatch.setattr(smoke.Path, "read_text", fixture_read)
         samples = asyncio.run(smoke.emit(telemetry, ["rules-baseline"], "fresh"))
+        assert samples[0].provider == "rules-baseline"
+        assert samples[0].model != "unknown"
         telemetry.flush(5000)
         telemetry.shutdown()
         traces, logs, metrics = [], [], []
@@ -188,6 +196,9 @@ def test_emit_only_is_explicitly_nonzero(monkeypatch):
     class Telemetry:
         enabled = True
 
+        def describe(self):
+            return {"resource": {"service.version": "1.2.3", "deployment.environment": "test"}}
+
         def flush(self, *args):
             pass
 
@@ -207,3 +218,79 @@ def test_emit_only_is_explicitly_nonzero(monkeypatch):
     assert code == 2
     assert evidence["status"] == "emitted_unverified"
     assert evidence["ingestion_verified"] is False
+
+
+def test_make_smoke_stdout_is_one_json_document():
+    root = Path(__file__).resolve().parents[2]
+    # Point at the active test interpreter's venv without requiring a second install.
+    import sys
+
+    env = {k: v for k, v in os.environ.items() if not k.startswith("OPENLIT_SMOKE_")}
+    result = subprocess.run(
+        [
+            "make",
+            "--no-print-directory",
+            "openlit-smoke",
+            f"VENV={Path(sys.executable).parent.parent}",
+        ],
+        cwd=root,
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=15,
+    )
+    assert result.returncode == 2  # Make's failure code, not the Python CLI's 1.
+    evidence = json.loads(result.stdout)
+    assert evidence["error"] == "verification_config_missing_or_invalid"
+
+
+def test_evidence_records_actual_sample_and_safe_build_resource_identity(monkeypatch):
+    class Telemetry:
+        enabled = True
+
+        def flush(self, *args):
+            pass
+
+        def shutdown(self):
+            pass
+
+        def describe(self):
+            return {
+                "resource": {
+                    "service.version": "v2.3.4",
+                    "deployment.environment": "staging",
+                    "secret.extra": SECRET,
+                }
+            }
+
+    monkeypatch.setattr("dungeon_director.telemetry.setup_telemetry", lambda settings: Telemetry())
+    monkeypatch.setattr(smoke, "build_identity", lambda: {"revision": "a" * 40, "dirty": False})
+
+    async def emit(*args):
+        return [smoke.Sample("req1", "groq", "actual-model-v3")]
+
+    monkeypatch.setattr(smoke, "emit", emit)
+    code, evidence = smoke.run(
+        argparse.Namespace(live_provider=[], live=False, emit_only=True, deadline=1),
+        {"OTEL_EXPORTER_OTLP_ENDPOINT": "http://127.0.0.1:4318", "SECRET": SECRET},
+    )
+    assert code == 2
+    assert evidence["samples"] == [
+        {"request_id": "req1", "provider": "groq", "model": "actual-model-v3"}
+    ]
+    assert evidence["service_version"] == "v2.3.4"
+    assert evidence["environment"] == "staging"
+    assert evidence["build"] == {"revision": "a" * 40, "dirty": False}
+    assert SECRET not in json.dumps(evidence)
+
+
+@pytest.mark.parametrize("value", ["https://user:secret@host", "sk-secret", "Bearer token", "x\ny"])
+def test_evidence_labels_reject_sensitive_or_unbounded_values(value):
+    assert smoke.evidence_label(value) == "unknown"
+
+
+def test_build_identity_reports_checkout_without_exposing_status_paths():
+    identity = smoke.build_identity()
+    assert len(identity["revision"]) == 40
+    assert isinstance(identity["dirty"], bool)
+    assert set(identity) == {"revision", "dirty"}
