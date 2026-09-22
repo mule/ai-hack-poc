@@ -3,6 +3,9 @@
 Status: **Implemented** (issue #11). OpenTelemetry traces and metrics for every
 director generation decision, plus a local OpenLIT stack to look at them.
 
+For model latency, reliability, usage, room behavior, and matched comparisons, see
+[the model-view recipes](model-views.md) and their parameterized SQL queries.
+
 ## What is emitted
 
 Every `POST /v1/generate` produces **one span** named `director.generate` and

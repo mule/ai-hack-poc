@@ -50,7 +50,7 @@ from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from enum import StrEnum
-from typing import TYPE_CHECKING, Protocol, runtime_checkable
+from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
 
 from dungeon_director.contracts import GenerationRequest
 from dungeon_director.errors import ProviderSelectionError
@@ -171,6 +171,8 @@ class ComparisonMeta:
     created_at: datetime
     #: The active execution plus one per configured shadow target (including skipped ones).
     expected: int
+    #: Explicit parent span context; never exported as an attribute or persisted.
+    parent_context: Any = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -415,7 +417,9 @@ class ShadowEvaluator:
             if reason is not None:
                 self._warn_skip(target, reason)
 
-    def begin(self, request: GenerationRequest, *, provider: str, model: str) -> ShadowComparison:
+    def begin(
+        self, request: GenerationRequest, *, provider: str, model: str, parent_context: Any = None
+    ) -> ShadowComparison:
         """Start a comparison and launch every shadow target. Synchronous and non-blocking.
 
         Call from the active path right after the active provider was selected
@@ -427,6 +431,7 @@ class ShadowEvaluator:
             run_id=request.run_id,
             created_at=datetime.now(UTC),
             expected=1 + len(self._settings.targets),
+            parent_context=parent_context,
         )
         comparison = ShadowComparison(self, meta, provider=provider, model=model)
         self._notify(lambda o: o.comparison_started(meta), "comparison_started")
@@ -502,7 +507,15 @@ class ShadowEvaluator:
         task.add_done_callback(lambda done, run=run: self._on_done(done, run))
 
     async def _run(self, run: _Run, request: GenerationRequest) -> None:
-        outcome = await self._runner(request, run.provider, run.model, self._timeout)
+        # Local import avoids a cycle: the observer consumes these record types.
+        from dungeon_director.comparison_telemetry import telemetry_context
+
+        with telemetry_context(
+            shadow_comparison_id=run.comparison.comparison_id,
+            execution_mode="shadow",
+            parent_context=run.comparison.meta.parent_context,
+        ):
+            outcome = await self._runner(request, run.provider, run.model, self._timeout)
         status = ExecutionStatus.SUCCESS if outcome.response.success else ExecutionStatus.FAILURE
         self._emit_shadow(run, status, replace(outcome, comparison_id=run.comparison.comparison_id))
 

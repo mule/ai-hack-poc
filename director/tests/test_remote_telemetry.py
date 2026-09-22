@@ -332,10 +332,10 @@ def test_timeouts_and_interval_are_clamped(stub_exporters):
     telemetry = build(
         {
             "OTEL_EXPORTER_OTLP_ENDPOINT": "http://c:4318",
-            "OTEL_EXPORTER_OTLP_TIMEOUT": "999999",  # -> 30000 ms
-            "OTEL_EXPORTER_OTLP_TRACES_TIMEOUT": "42",  # too small -> default clamp
-            "OTEL_EXPORTER_OTLP_METRIC_EXPORT_INTERVAL": "10",  # -> 1000 ms
-            "OTEL_EXPORTER_OTLP_METRICS_TIMEOUT": "2000",
+            "OTEL_EXPORTER_OTLP_TIMEOUT": "999999",  # invalid -> default 10 seconds
+            "OTEL_EXPORTER_OTLP_TRACES_TIMEOUT": "42",  # too large -> shared default
+            "OTEL_METRIC_EXPORT_INTERVAL": "10",  # invalid -> default 5000 ms
+            "OTEL_EXPORTER_OTLP_METRICS_TIMEOUT": "2",
         }
     )
     try:
@@ -466,9 +466,10 @@ def test_emit_log_survives_a_broken_logger_provider():
 class FakeCollector:
     """A loopback OTLP receiver that records requests and can misbehave."""
 
-    def __init__(self, *, status: int = 200, delay: float = 0.0) -> None:
+    def __init__(self, *, status: int = 200, delay: float = 0.0, reason: str | None = None) -> None:
         self.requests: list[dict[str, Any]] = []
         self.status = status
+        self.reason = reason
         self.delay = delay
         handler = self._make_handler()
         self.server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), handler)
@@ -498,7 +499,7 @@ class FakeCollector:
                 )
                 if collector.delay:
                     time.sleep(collector.delay)
-                self.send_response(collector.status)
+                self.send_response(collector.status, collector.reason)
                 self.send_header("content-length", "0")
                 self.end_headers()
 
@@ -538,7 +539,7 @@ def test_export_reaches_fake_collector_with_headers_and_stays_ok(collector):
     env = {
         "OTEL_EXPORTER_OTLP_ENDPOINT": collector.endpoint,
         "OTEL_EXPORTER_OTLP_HEADERS": f"x-api-key={SECRET}",
-        "OTEL_EXPORTER_OTLP_METRIC_EXPORT_INTERVAL": "1000",
+        "OTEL_METRIC_EXPORT_INTERVAL": "1000",
     }
     telemetry = setup_telemetry(TelemetrySettings.from_env(env))
     client = make_app(telemetry)
@@ -567,8 +568,8 @@ def test_collector_rejections_do_not_change_responses_and_show_as_failing(caplog
         caplog.set_level(logging.INFO)
         env = {
             "OTEL_EXPORTER_OTLP_ENDPOINT": failing.endpoint,
-            "OTEL_EXPORTER_OTLP_TIMEOUT": "1000",
-            "OTEL_EXPORTER_OTLP_METRIC_EXPORT_INTERVAL": "1000",
+            "OTEL_EXPORTER_OTLP_TIMEOUT": "1",
+            "OTEL_METRIC_EXPORT_INTERVAL": "1000",
         }
         telemetry = setup_telemetry(TelemetrySettings.from_env(env))
         with make_app(telemetry) as client:
@@ -590,7 +591,7 @@ def test_collector_rejections_do_not_change_responses_and_show_as_failing(caplog
 def test_unreachable_collector_keeps_director_healthy_and_shutdown_bounded():
     env = {
         "OTEL_EXPORTER_OTLP_ENDPOINT": "http://127.0.0.1:9",  # nothing listens
-        "OTEL_EXPORTER_OTLP_TIMEOUT": "500",
+        "OTEL_EXPORTER_OTLP_TIMEOUT": "0.5",
     }
     telemetry = setup_telemetry(TelemetrySettings.from_env(env))
     try:
@@ -617,7 +618,7 @@ def test_slow_collector_does_not_delay_generation():
             TelemetrySettings.from_env(
                 {
                     "OTEL_EXPORTER_OTLP_ENDPOINT": slow.endpoint,
-                    "OTEL_EXPORTER_OTLP_TIMEOUT": "500",
+                    "OTEL_EXPORTER_OTLP_TIMEOUT": "0.5",
                 }
             )
         )
@@ -756,3 +757,119 @@ def test_service_generate_works_with_exporting_telemetry(collector):
     )
     outcome = asyncio.run(service.generate(make_request()))
     assert outcome.status_code == 200
+
+
+@pytest.mark.parametrize(
+    "endpoint", ["http://[broken", "http://collector:bad", "http://collector:99999"]
+)
+def test_malformed_base_endpoint_disables_export_without_raising(endpoint, caplog):
+    telemetry = build({"OTEL_EXPORTER_OTLP_ENDPOINT": endpoint})
+    assert not telemetry.enabled
+    assert endpoint not in caplog.text
+
+
+def test_malformed_signal_endpoint_disables_only_that_signal(stub_exporters):
+    telemetry = build(
+        {
+            "OTEL_EXPORTER_OTLP_ENDPOINT": "http://collector:4318",
+            "OTEL_EXPORTER_OTLP_TRACES_ENDPOINT": "http://[broken",
+        }
+    )
+    try:
+        assert stub_for(stub_exporters, "traces") is None
+        assert stub_for(stub_exporters, "metrics") is not None
+        assert stub_for(stub_exporters, "logs") is not None
+    finally:
+        telemetry.shutdown()
+
+
+def test_real_exporters_do_not_reparse_rejected_environment_headers(collector, monkeypatch, caplog):
+    # The SDK's `headers or parse_env_headers` must not resurrect rejected input.
+    for suffix in ("", "_TRACES", "_METRICS", "_LOGS"):
+        monkeypatch.setenv(f"OTEL_EXPORTER_OTLP{suffix}_HEADERS", SECRET)
+    monkeypatch.setenv("OTEL_EXPORTER_OTLP_ENDPOINT", collector.endpoint)
+    telemetry = setup_telemetry(TelemetrySettings.from_env())
+    with make_app(telemetry) as client:
+        assert client.post("/v1/generate", json=request_payload()).status_code == 200
+        telemetry.emit_log("test.event")
+        telemetry.flush(5000)
+    assert set(collector.paths()) == {"/v1/traces", "/v1/metrics", "/v1/logs"}
+    assert SECRET not in caplog.text
+    assert all(SECRET not in str(req["headers"]) for req in collector.requests)
+    # Setup never mutates other instrumentation's environment.
+    import os
+
+    assert os.environ["OTEL_EXPORTER_OTLP_HEADERS"] == SECRET
+
+
+def test_encoded_authorization_and_case_insensitive_override_reach_collector(collector):
+    telemetry = build(
+        {
+            "OTEL_EXPORTER_OTLP_ENDPOINT": collector.endpoint,
+            "OTEL_EXPORTER_OTLP_HEADERS": "Authorization=Bearer%20shared",
+            "OTEL_EXPORTER_OTLP_TRACES_HEADERS": "authorization=Bearer%20override",
+        }
+    )
+    with make_app(telemetry) as client:
+        assert client.post("/v1/generate", json=request_payload()).status_code == 200
+        telemetry.emit_log("test.event")
+        telemetry.flush(5000)
+    for path in ("/v1/traces", "/v1/metrics", "/v1/logs"):
+        expected = "Bearer override" if path == "/v1/traces" else "Bearer shared"
+        assert collector.requests_for(path)[-1]["headers"]["authorization"] == expected
+
+
+@pytest.mark.parametrize("value", ["a%0D%0AX-Injected:yes", "%00token", "%20leading", "%FF"])
+def test_decoded_invalid_header_values_are_rejected(value):
+    settings = TelemetrySettings.from_env({"OTEL_EXPORTER_OTLP_HEADERS": f"Authorization={value}"})
+    assert settings.headers == ()
+    assert settings.rejected_header_entries == 1
+
+
+def test_collector_response_reason_cannot_leak_into_sdk_logs(caplog):
+    collector = FakeCollector(status=400, reason=SECRET)
+    try:
+        telemetry = build({"OTEL_EXPORTER_OTLP_ENDPOINT": collector.endpoint})
+        with make_app(telemetry) as client:
+            assert client.post("/v1/generate", json=request_payload()).status_code == 200
+            telemetry.emit_log("test.event")
+            telemetry.flush(5000)
+        assert set(collector.paths()) == {"/v1/traces", "/v1/metrics", "/v1/logs"}
+        assert "details withheld" in caplog.text
+        assert SECRET not in caplog.text
+    finally:
+        collector.close()
+
+
+def test_sdk_exception_diagnostics_use_only_fixed_text(caplog):
+    from dungeon_director.telemetry import _quiet_otlp_exporter_logging
+
+    _quiet_otlp_exporter_logging()
+    sdk_logger = logging.getLogger(TRACE_EXPORTER_MOD)
+    try:
+        raise RuntimeError(SECRET)
+    except RuntimeError:
+        sdk_logger.exception("Failed request: %s", SECRET)
+    assert "details withheld" in caplog.text
+    assert SECRET not in caplog.text
+
+
+def test_standard_timeout_seconds_and_metric_interval_milliseconds(stub_exporters):
+    settings = TelemetrySettings.from_env(
+        {
+            "OTEL_EXPORTER_OTLP_ENDPOINT": "http://collector:4318",
+            "OTEL_EXPORTER_OTLP_TIMEOUT": "5",
+            "OTEL_EXPORTER_OTLP_TRACES_TIMEOUT": "0.75",
+            "OTEL_METRIC_EXPORT_INTERVAL": "2345",
+        }
+    )
+    telemetry = setup_telemetry(settings)
+    try:
+        assert stub_for(stub_exporters, "traces").timeout == 0.75
+        assert stub_for(stub_exporters, "metrics").timeout == 5.0
+        assert stub_for(stub_exporters, "logs").timeout == 5.0
+        assert settings.metric_export_interval_seconds == 2.345
+        reader = next(iter(telemetry.meter_provider._metric_readers))
+        assert reader._export_interval_millis == 2345
+    finally:
+        telemetry.shutdown()

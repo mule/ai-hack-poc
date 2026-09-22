@@ -8,10 +8,13 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import hashlib
 import json
 import math
 import sys
+import threading
 import time
+import uuid
 from collections import defaultdict
 from collections.abc import Sequence
 from dataclasses import asdict, dataclass, field
@@ -33,6 +36,7 @@ from dungeon_director.cloudflare_jev import (
     JevConfig,
     JevTransport,
 )
+from dungeon_director.comparison_telemetry import current_correlation, telemetry_context
 from dungeon_director.contracts import (
     CONTRACT_VERSION,
     ErrorKind,
@@ -50,6 +54,12 @@ from dungeon_director.registry import ProviderRegistry
 from dungeon_director.rules import RULES_MODEL, RULES_PROVIDER_ID, RulesProvider
 from dungeon_director.service import DirectorService, GenerationOutcome
 from dungeon_director.settings import DirectorSettings
+from dungeon_director.telemetry import (
+    DirectorTelemetry,
+    TelemetrySettings,
+    setup_telemetry,
+)
+from opentelemetry import trace
 
 SUPPORTED_PROVIDERS = (
     RULES_PROVIDER_ID,
@@ -121,6 +131,7 @@ class ReplayItemResult:
     # Retries the provider reported for this decision (None = not reported). The
     # director itself never retries, so this stays None unless a provider says so.
     retry_count: int | None = None
+    telemetry_ids: dict[str, str] = field(default_factory=dict)
     timestamp: str = field(
         default_factory=lambda: datetime.now(UTC).isoformat().replace("+00:00", "Z")
     )
@@ -141,6 +152,7 @@ class ReplayItemResult:
             "room": self.room,
             "provider_metadata": self.provider_metadata,
             "retry_count": self.retry_count,
+            "telemetry_ids": self.telemetry_ids,
             "timestamp": self.timestamp,
         }
 
@@ -276,6 +288,7 @@ def build_default_service(
     groq_transport: GroqTransport | None = None,
     cerebras_transport: CerebrasTransport | None = None,
     timeout_seconds: float = 10.0,
+    telemetry: DirectorTelemetry | None = None,
 ) -> tuple[DirectorService, ProviderRegistry]:
     """Construct a ProviderRegistry and DirectorService with all 4 providers.
 
@@ -310,7 +323,7 @@ def build_default_service(
         default_model=RULES_MODEL,
         timeout_seconds=timeout_seconds,
     )
-    service = DirectorService(registry, settings)
+    service = DirectorService(registry, settings, telemetry=telemetry)
     return service, registry
 
 
@@ -322,9 +335,41 @@ async def run_replay_item(
     iteration: int,
 ) -> ReplayItemResult:
     """Execute one request against the director service."""
-    t0 = time.perf_counter()
-    outcome: GenerationOutcome = await service.generate(request, provider=provider, model=model)
-    elapsed_ms = round((time.perf_counter() - t0) * 1000, 3)
+    # A case span is shared context for the service/provider spans; the artifact
+    # also carries these IDs so operators can find this exact replay in OpenLIT.
+    telemetry = service._telemetry
+    correlation = {**current_correlation(), "execution_mode": "replay"}
+    span_attributes = {
+        **correlation,
+        "director.request_id": request.request_id,
+        "director.run_id": request.run_id,
+    }
+    span = None
+    parent_context = None
+    try:
+        span = telemetry.tracer_provider.get_tracer(__name__).start_span(
+            "director.replay.case", attributes=span_attributes
+        )
+        parent_context = trace.set_span_in_context(span)
+    except Exception:
+        pass  # Telemetry failure must not change benchmark results.
+    try:
+        t0 = time.perf_counter()
+        with telemetry_context(execution_mode="replay", parent_context=parent_context):
+            outcome: GenerationOutcome = await service.generate(
+                request, provider=provider, model=model
+            )
+        elapsed_ms = round((time.perf_counter() - t0) * 1000, 3)
+        try:
+            telemetry.emit_log("replay case completed", span_attributes, parent_context)
+        except Exception:
+            pass
+    finally:
+        if span is not None:
+            try:
+                span.end()
+            except Exception:
+                pass
 
     resp: GenerationResponse = outcome.response
     error_code = resp.metadata.error.code.value if resp.metadata.error else None
@@ -361,6 +406,7 @@ async def run_replay_item(
         room=room_dict,
         provider_metadata=provider_metadata,
         retry_count=retry_count,
+        telemetry_ids={key: value for key, value in correlation.items() if key != "execution_mode"},
     )
 
 
@@ -467,6 +513,8 @@ async def run_benchmark(
     iterations: int = 1,
     concurrency: int = 1,
     input_name: str = "dataset.jsonl",
+    evaluation_id: str | None = None,
+    dataset_version: str = CONTRACT_VERSION,
 ) -> BenchmarkReport:
     """Run replay benchmark for the given requests across selected providers.
 
@@ -477,16 +525,43 @@ async def run_benchmark(
         providers, models, iterations=iterations, concurrency=concurrency
     )
     owned_registry: ProviderRegistry | None = None
+    owned_telemetry: DirectorTelemetry | None = None
     if service is None:
-        service, owned_registry = build_default_service()
+        owned_telemetry = _setup_replay_telemetry()
+        try:
+            service, owned_registry = build_default_service(telemetry=owned_telemetry)
+        except BaseException:
+            await _shutdown_replay_telemetry(owned_telemetry)
+            raise
     reg = registry or owned_registry
+
+    replay_id = f"replay-{uuid.uuid4().hex}"
+    dataset_id = (
+        "dataset-"
+        + hashlib.sha256(
+            json.dumps([req.model_dump(mode="json") for req in requests], sort_keys=True).encode()
+        ).hexdigest()[:32]
+    )
 
     try:
         semaphore = asyncio.Semaphore(concurrency)
 
         async def worker(req: GenerationRequest, prov: str, mod: str, it: int) -> ReplayItemResult:
             async with semaphore:
-                return await run_replay_item(service, req, prov, mod, it)
+                case_id = (
+                    "case-"
+                    + hashlib.sha256(req.model_dump_json().encode()).hexdigest()[:32]
+                    + f"-{it}"
+                )
+                with telemetry_context(
+                    execution_mode="replay",
+                    replay_id=replay_id,
+                    evaluation_id=evaluation_id or replay_id,
+                    dataset_id=dataset_id,
+                    dataset_version=dataset_version,
+                    case_id=case_id,
+                ):
+                    return await run_replay_item(service, req, prov, mod, it)
 
         tasks: list[asyncio.Task[ReplayItemResult]] = []
         for prov in providers:
@@ -532,13 +607,36 @@ async def run_benchmark(
             results=all_results,
         )
     finally:
-        if reg is not None:
-            try:
-                # Configured shadow calls use the same provider clients. Drain
-                # them before the registry closes those clients.
-                await service.aclose()
-            finally:
-                await reg.aclose()
+        try:
+            if reg is not None:
+                try:
+                    # Drain shadow calls before closing their provider clients.
+                    await service.aclose()
+                finally:
+                    await reg.aclose()
+        finally:
+            if owned_telemetry is not None:
+                await _shutdown_replay_telemetry(owned_telemetry)
+
+
+def _setup_replay_telemetry() -> DirectorTelemetry:
+    try:
+        return setup_telemetry(TelemetrySettings.from_env())
+    except Exception:
+        return DirectorTelemetry(enabled=False)
+
+
+async def _shutdown_replay_telemetry(telemetry: DirectorTelemetry) -> None:
+    # A faulty SDK/exporter must not keep a completed benchmark alive forever.
+    def shutdown() -> None:
+        try:
+            telemetry.shutdown()
+        except Exception:
+            pass
+
+    thread = threading.Thread(target=shutdown, daemon=True, name="replay-telemetry-shutdown")
+    thread.start()
+    await asyncio.to_thread(thread.join, 5.0)
 
 
 def print_human_summary(report: BenchmarkReport) -> None:
@@ -631,6 +729,8 @@ def build_arg_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Do not print human summary table to stderr.",
     )
+    parser.add_argument("--evaluation-id", help="Bounded evaluation correlation ID for OpenLIT.")
+    parser.add_argument("--dataset-version", default=CONTRACT_VERSION)
     return parser
 
 
@@ -674,18 +774,23 @@ async def main_async(args: argparse.Namespace) -> int:
         print(f"Warning: no generation requests found in {args.input}", file=sys.stderr)
         return 0
 
-    service, registry = build_default_service(timeout_seconds=args.timeout)
-
-    report = await run_benchmark(
-        requests=requests,
-        providers=args.providers,
-        models=model_overrides,
-        service=service,
-        registry=registry,
-        iterations=args.iterations,
-        concurrency=args.concurrency,
-        input_name=str(args.input),
-    )
+    telemetry = _setup_replay_telemetry()
+    try:
+        service, registry = build_default_service(timeout_seconds=args.timeout, telemetry=telemetry)
+        report = await run_benchmark(
+            requests=requests,
+            providers=args.providers,
+            models=model_overrides,
+            service=service,
+            registry=registry,
+            iterations=args.iterations,
+            concurrency=args.concurrency,
+            input_name=str(args.input),
+            evaluation_id=getattr(args, "evaluation_id", None),
+            dataset_version=getattr(args, "dataset_version", CONTRACT_VERSION),
+        )
+    finally:
+        await _shutdown_replay_telemetry(telemetry)
 
     if not args.quiet:
         print_human_summary(report)
