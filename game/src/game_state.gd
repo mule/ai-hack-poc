@@ -64,7 +64,11 @@ var player_turns: int = 0
 var is_player_dead: bool = false
 var active_provider: String = ""
 var active_model: String = ""
-var telemetry_sink: Variant = null
+var telemetry_sink: Variant = null:
+	set(val):
+		telemetry_sink = val
+		if world != null:
+			world.telemetry_sink = val
 var current_room_id: String = ""
 
 
@@ -296,6 +300,7 @@ func player_action_step(dir: Vector2i) -> bool:
 	var tile: int = get_tile(target_pos)
 	if tile == TileType.DOOR_CLOSED or tile == TileType.SECRET_DOOR:
 		map_tiles[target_pos] = TileType.DOOR_OPEN
+		_record_door_revealed(target_pos)
 		log_message("You open the door." if tile == TileType.DOOR_CLOSED else "You find a hidden door and open it.")
 		_process_turn()
 		return true
@@ -427,6 +432,26 @@ func _process_enemy_turns() -> void:
 					enemy["pos"] = cand_pos_alt
 
 
+## Observation follows the actual closed/hidden -> open transition, never placement.
+func _record_door_revealed(pos: Vector2i) -> void:
+	if world == null or telemetry_sink == null:
+		return
+	var room_id := world.room_id_at(pos)
+	var record: Dictionary = world.rooms.get(room_id, {})
+	var request_id: String = "req-%s-init" % world.run_id
+	var parent_key: String = record.get("parent_frontier", "")
+	if world.frontiers.has(parent_key):
+		request_id = world.frontiers[parent_key].request_id
+	for frontier in world.frontiers.values():
+		if frontier.pos == pos and str(frontier.get("request_id", "")) != "":
+			request_id = frontier.request_id
+			break
+	var elapsed := float(maxi(0, Time.get_ticks_msec() - int(record.get("committed_at_msec", Time.get_ticks_msec()))))
+	telemetry_sink.enqueue_event("door.revealed", world.run_id, request_id, {
+		"room_id": room_id, "time_to_visible_ms": elapsed,
+	})
+
+
 func _check_room_transition() -> void:
 	if world == null:
 		return
@@ -435,21 +460,26 @@ func _check_room_transition() -> void:
 		return
 	current_room_id = new_room_id
 	if telemetry_sink != null and telemetry_sink.has_method("enqueue_event"):
-		var time_to_entry: Variant = null
-		if world.rooms.has(new_room_id):
-			var r_rec: Dictionary = world.rooms[new_room_id]
-			var committed_at: Variant = r_rec.get("committed_at_msec", null)
-			if committed_at != null:
-				time_to_entry = float(maxi(0, Time.get_ticks_msec() - int(committed_at)))
+		var time_to_entry: float = 0.0
+		var r_rec: Dictionary = world.rooms.get(new_room_id, {})
+		var committed_at: Variant = r_rec.get("committed_at_msec", null)
+		if committed_at != null:
+			time_to_entry = float(maxi(0, Time.get_ticks_msec() - int(committed_at)))
+
+		var r_meta: Dictionary = r_rec.get("meta", {})
+		var r_source: String = str(r_rec.get("source", ""))
+		var prov := str(r_meta.get("provider", active_provider if active_provider != "" else ("rules-baseline" if r_source == "fallback" else "director")))
+		var mod := str(r_meta.get("model", active_model if active_model != "" else ("builtin-v1" if r_source == "fallback" else "default")))
+
 		var attrs := {
 			"room_id": new_room_id,
-			"turn": player_turns,
+			"time_to_entry_ms": time_to_entry,
+			"provider": prov,
+			"model": mod,
 		}
-		if time_to_entry != null:
-			attrs["time_to_entry_ms"] = time_to_entry
 		var req_id: Variant = null
-		if world.rooms.has(new_room_id):
-			var pf: String = world.rooms[new_room_id].get("parent_frontier", "")
+		if not r_rec.is_empty():
+			var pf: String = r_rec.get("parent_frontier", "")
 			if pf != "" and world.frontiers.has(pf):
 				req_id = world.frontiers[pf].get("request_id", null)
 		if req_id == null or str(req_id) == "":

@@ -7,8 +7,10 @@ const GameState = preload("res://src/game_state.gd")
 const DungeonWorld = preload("res://world/dungeon_world.gd")
 const GenerationCoordinator = preload("res://world/generation_coordinator.gd")
 const ScriptedTransport = preload("res://tests/support/scripted_transport.gd")
+const StubDirector = preload("res://tests/support/stub_director.gd")
 const RoomGenerator = preload("res://generation/room_generator.gd")
 
+var _batches: Array[String] = []
 var _checks := 0
 var _failures := PackedStringArray()
 var _completed := false
@@ -36,6 +38,9 @@ func _run() -> void:
 	await _step("test_full_generation_lifecycle_telemetry", _test_full_generation_lifecycle_telemetry)
 	await _step("test_fallback_and_normalization_telemetry", _test_fallback_and_normalization_telemetry)
 	await _step("test_room_transition_telemetry", _test_room_transition_telemetry)
+	await _step("test_hidden_door_reveal", _test_hidden_door_reveal)
+	await _step("test_large_batches", _test_large_batches)
+	await _step("test_normalized_outcome_and_failing_provider", _test_normalized_outcome_and_failing_provider)
 	_completed = true
 	_finish()
 
@@ -66,6 +71,13 @@ func _check_eq(actual: Variant, expected: Variant, message: String) -> void:
 
 
 func _finish() -> void:
+	var fixture_out := OS.get_environment("DUNGEON_TELEMETRY_FIXTURE_OUT")
+	if fixture_out != "":
+		var fixture := FileAccess.open(fixture_out, FileAccess.WRITE)
+		_check(fixture != null, "Can write real emitted telemetry batches")
+		if fixture != null:
+			fixture.store_string(JSON.stringify({"batches": _batches}))
+			fixture.close()
 	print("\n--- Telemetry Test Results: %d Passed, %d Failed (completed=%s) ---" % [_checks - _failures.size(), _failures.size(), str(_completed)])
 	if _failures.is_empty() and _completed:
 		print("SUCCESS: All game telemetry checks passed!")
@@ -145,15 +157,21 @@ func _test_attribute_allowlist_and_sanitizer() -> void:
 	_check(!sanitized.has("disallowed_key"), "Disallowed key stripped")
 	_check(!sanitized.has("another_unregistered_field"), "Unregistered field stripped")
 
+	# Provider is forbidden on generation.queued in PR29 schema!
+	var queued_with_prov := {"frontier_id": "r-000:north", "depth": 1, "exit_direction": "north", "provider": "bad-prov"}
+	var res_queued := GameTelemetrySink.sanitize_event_attributes("generation.queued", queued_with_prov)
+	_check(!res_queued.has("provider"), "Provider is forbidden on generation.queued and stripped")
+
+	_check_eq(GameTelemetrySink.sanitize_event_attributes("generation.accepted", {"model": "@cf/typesafe/jev"}).get("model"), "@cf/typesafe/jev", "Cloudflare model IDs retain leading @")
 	# String length clamping / validation
 	var long_str := "a".repeat(129)
 	var too_long_attrs := {"provider": long_str}
-	var res_too_long := GameTelemetrySink.sanitize_event_attributes("generation.queued", too_long_attrs)
+	var res_too_long := GameTelemetrySink.sanitize_event_attributes("generation.accepted", too_long_attrs)
 	_check(!res_too_long.has("provider"), "Overly long string (>128 chars) rejected")
 
 	# Newlines forbidden in string values
 	var newline_attrs := {"provider": "provider\nwith_newline"}
-	var res_nl := GameTelemetrySink.sanitize_event_attributes("generation.queued", newline_attrs)
+	var res_nl := GameTelemetrySink.sanitize_event_attributes("generation.accepted", newline_attrs)
 	_check(!res_nl.has("provider"), "String containing newline rejected")
 
 	# Int range clamping (danger 1..5, depth 1..128)
@@ -188,7 +206,7 @@ func _test_sensitive_key_and_value_redaction() -> void:
 	var token_attrs := {
 		"provider": "Bearer sk-999999999",
 	}
-	var res_tok := GameTelemetrySink.sanitize_event_attributes("generation.queued", token_attrs)
+	var res_tok := GameTelemetrySink.sanitize_event_attributes("generation.accepted", token_attrs)
 	_check(!res_tok.has("provider"), "Value with bearer token pattern dropped")
 
 	_end()
@@ -226,6 +244,7 @@ func _test_batch_flush_and_custom_http() -> void:
 	var dispatched_batches: Array[Dictionary] = []
 	sink.custom_http_post = func(url: String, headers: PackedStringArray, body: String, on_done: Callable) -> void:
 		var parsed: Dictionary = JSON.parse_string(body)
+		_batches.append(body)
 		dispatched_batches.append({"url": url, "payload": parsed})
 		on_done.call(true, parsed.events.size())
 
@@ -255,6 +274,12 @@ func _test_offline_and_disabled_mode() -> void:
 	_check(!ok, "Enqueue fails safely when disabled")
 	_check_eq(sink_off.get_stats().queued, 0, "No events queued when disabled")
 
+	var unset_env := OS.get_environment("DUNGEON_TELEMETRY_ENABLED")
+	OS.unset_environment("DUNGEON_TELEMETRY_ENABLED")
+	var default_sink := GameTelemetrySink.new()
+	_check(!default_sink.enabled, "Sink is opt-in by default")
+	OS.set_environment("DUNGEON_TELEMETRY_ENABLED", unset_env)
+	default_sink.free()
 	var sink_none := GameTelemetrySink.new("none")
 	_check(!sink_none.enabled, "Sink with url='none' is disabled")
 
@@ -267,6 +292,7 @@ func _test_full_generation_lifecycle_telemetry() -> void:
 	sink.enabled = true
 	sink.custom_http_post = func(_url: String, _headers: PackedStringArray, body: String, on_done: Callable) -> void:
 		var parsed: Dictionary = JSON.parse_string(body)
+		_batches.append(body)
 		for ev in parsed.get("events", []):
 			events_captured.append(ev)
 		on_done.call(true, parsed.events.size())
@@ -281,7 +307,7 @@ func _test_full_generation_lifecycle_telemetry() -> void:
 	coord.provider = "test-provider"
 	coord.model = "test-model"
 
-	# Initial world start emits room.committed, frontier.discovered, and door.revealed
+	# Initial world start emits room.committed and frontier.discovered
 	sink.poll(1.0)
 	var names_at_start: Array[String] = []
 	for ev in events_captured:
@@ -289,7 +315,7 @@ func _test_full_generation_lifecycle_telemetry() -> void:
 
 	_check(names_at_start.has("room.committed"), "Initial start room emitted room.committed")
 	_check(names_at_start.has("frontier.discovered"), "Start exits emitted frontier.discovered")
-	_check(names_at_start.has("door.revealed"), "Start exits emitted door.revealed")
+	_check(!names_at_start.has("door.revealed"), "Initial start exits do NOT emit door.revealed without request_id")
 
 	events_captured.clear()
 
@@ -298,12 +324,17 @@ func _test_full_generation_lifecycle_telemetry() -> void:
 	coord.update()
 
 	sink.poll(1.0)
-	_check_eq(events_captured.size(), 1, "generation.queued captured")
-	_check_eq(events_captured[0].event_name, "generation.queued", "Event is generation.queued")
-	_check_eq(events_captured[0].attributes.provider, "test-provider", "Provider correlated")
-	_check_eq(events_captured[0].attributes.model, "test-model", "Model correlated")
+	var queued_and_sent: Array[String] = []
+	for ev in events_captured:
+		queued_and_sent.append(ev.event_name)
+
+	_check(queued_and_sent.has("generation.queued"), "generation.queued captured")
+	_check(queued_and_sent.has("generation.sent"), "generation.sent captured")
 
 	var req_id: String = events_captured[0].request_id
+	var timing := {"now": 1450}
+	coord.in_flight[req_id].started = 1000
+	coord.clock = func(): return timing.now
 	events_captured.clear()
 
 	# Complete generation with valid plan
@@ -336,10 +367,14 @@ func _test_full_generation_lifecycle_telemetry() -> void:
 	for ev in events_captured:
 		lifecycle_names.append(ev.event_name)
 
+	var response_events := events_captured.filter(func(e): return e.event_name == "generation.response_received")
+	_check_eq(response_events[0].attributes.network_ms, 450.0, "Network time uses client clock, not provider latency 120ms")
+	_check(lifecycle_names.has("generation.response_received"), "Emitted generation.response_received")
 	_check(lifecycle_names.has("generation.accepted"), "Emitted generation.accepted")
 	_check(lifecycle_names.has("room.committed"), "Emitted room.committed for r-001")
+	_check(!lifecycle_names.has("door.revealed"), "Placement never reports an unopened door as revealed")
+	_check(lifecycle_names.find("generation.accepted") < lifecycle_names.find("room.committed"), "Acceptance precedes room commit")
 	_check(lifecycle_names.has("frontier.discovered"), "Emitted frontier.discovered for east exit of r-001")
-	_check(lifecycle_names.has("door.revealed"), "Emitted door.revealed for east exit of r-001")
 
 	_end()
 
@@ -350,6 +385,7 @@ func _test_fallback_and_normalization_telemetry() -> void:
 	sink.enabled = true
 	sink.custom_http_post = func(_url: String, _headers: PackedStringArray, body: String, on_done: Callable) -> void:
 		var parsed: Dictionary = JSON.parse_string(body)
+		_batches.append(body)
 		for ev in parsed.get("events", []):
 			events_captured.append(ev)
 		on_done.call(true, parsed.events.size())
@@ -378,7 +414,7 @@ func _test_fallback_and_normalization_telemetry() -> void:
 	for ev in events_captured:
 		names.append(ev.event_name)
 
-	_check(names.has("generation.rejected"), "Emitted generation.rejected on transport failure")
+	_check(!names.has("generation.rejected"), "Transport failure is not a game plan rejection")
 	_check(names.has("generation.fallback_applied"), "Emitted generation.fallback_applied")
 	_check(names.has("room.committed"), "Emitted room.committed for fallback room")
 
@@ -386,21 +422,28 @@ func _test_fallback_and_normalization_telemetry() -> void:
 
 
 func _test_room_transition_telemetry() -> void:
-	var events_captured: Array[Dictionary] = []
+	var all_captured_events: Array[Dictionary] = []
+	var captured_raw := {"json": ""}
 	var sink := GameTelemetrySink.new("http://test-collector:8000")
 	sink.enabled = true
 	sink.custom_http_post = func(_url: String, _headers: PackedStringArray, body: String, on_done: Callable) -> void:
+		captured_raw["json"] = body
 		var parsed: Dictionary = JSON.parse_string(body)
+		_batches.append(body)
 		for ev in parsed.get("events", []):
-			events_captured.append(ev)
+			all_captured_events.append(ev)
 		on_done.call(true, parsed.events.size())
 
 	var state := GameState.new()
+	state.active_provider = "test-provider"
+	state.active_model = "test-model"
 	state.telemetry_sink = sink
 	state.enable_dynamic_world(1)
 
 	var transport := ScriptedTransport.new()
 	var coord := GenerationCoordinator.new(state, transport)
+	coord.provider = "test-provider"
+	coord.model = "test-model"
 	coord.telemetry_sink = sink
 
 	# Trigger generation for north exit
@@ -433,10 +476,6 @@ func _test_room_transition_telemetry() -> void:
 	}
 	transport.deliver(0, {"transport_ok": true, "http_status": 200, "body": JSON.stringify(resp2)})
 
-	# Clear previous events
-	sink.poll(1.0)
-	events_captured.clear()
-
 	# Step player across the door into room 2
 	# Start room player is at (4, 2), door at (4, 1). First step opens the closed door.
 	# Second step moves into door (4, 1). Third step moves into r-002 floor tile (4, 0).
@@ -445,10 +484,138 @@ func _test_room_transition_telemetry() -> void:
 	state.player_action_step(Vector2i.UP) # Walk into r-002 (4, 0)
 
 	sink.poll(1.0)
-	var entered_events := events_captured.filter(func(e): return e.event_name == "room.entered")
+	var entered_events := all_captured_events.filter(func(e): return e.event_name == "room.entered")
 	_check_eq(entered_events.size(), 1, "room.entered captured when player entered r-002")
 	if not entered_events.is_empty():
 		_check_eq(entered_events[0].attributes.room_id, "r-002", "room_id matches r-002")
 		_check(entered_events[0].attributes.has("time_to_entry_ms"), "time_to_entry_ms attribute present")
+		_check_eq(entered_events[0].attributes.provider, "test-provider", "provider attribute present on room.entered")
+		_check_eq(entered_events[0].attributes.model, "test-model", "model attribute present on room.entered")
 
+
+	_end()
+
+
+func _test_hidden_door_reveal() -> void:
+	var sink := GameTelemetrySink.new()
+	sink.enabled = true
+	var events: Array[Dictionary] = []
+	sink.custom_http_post = func(_url, _headers, body, done):
+		var parsed: Dictionary = JSON.parse_string(body)
+		_batches.append(body)
+		for event in parsed.events:
+			events.append(event)
+		done.call(true, parsed.events.size())
+	var state := GameState.new()
+	state.telemetry_sink = sink
+	state.enable_dynamic_world(1)
+	var door := Vector2i(4, 1)
+	state.map_tiles[door] = GameState.TileType.SECRET_DOOR
+	state.player_pos = Vector2i(4, 2)
+	sink.poll(1.0)
+	_check(events.filter(func(e): return e.event_name == "door.revealed").is_empty(), "Hidden door is not revealed at commit")
+	events.clear()
+	state.player_action_step(Vector2i.UP)
+	sink.poll(1.0)
+	var reveals := events.filter(func(e): return e.event_name == "door.revealed")
+	_check_eq(reveals.size(), 1, "Opening hidden door emits exactly one reveal")
+	_check(reveals[0].attributes.has("time_to_visible_ms"), "Reveal carries locally measured time")
+	state.player_action_step(Vector2i.UP)
+	sink.poll(1.0)
+	_check_eq(events.filter(func(e): return e.event_name == "door.revealed").size(), 1, "Revisiting open door does not duplicate reveal")
+	_check(GameTelemetrySink.sanitize_event_attributes("room.committed", {"has_secret": true}).get("has_secret") == true, "Semantic has_secret survives sensitive-key redaction")
+	sink.free()
+	_end()
+
+
+func _test_large_batches() -> void:
+	var sink := GameTelemetrySink.new()
+	sink.enabled = true
+	var observed := {"count": 0, "max_bytes": 0}
+	sink.custom_http_post = func(_url, _headers, body, done):
+		var parsed: Dictionary = JSON.parse_string(body)
+		_batches.append(body)
+		observed.count += parsed.events.size()
+		observed.max_bytes = maxi(observed.max_bytes, body.to_utf8_buffer().size())
+		done.call(true, parsed.events.size())
+	for i in range(100):
+		sink.enqueue_event("room.committed", "r".repeat(64), "q".repeat(64), {
+			"room_id": "a".repeat(64), "frontier_id": "b".repeat(120) + ":north",
+			"provider": "p".repeat(128), "model": "m".repeat(128),
+			"shadow_comparison_id": "s".repeat(64), "replay_id": "e".repeat(64),
+			"room_type": "room", "room_size": "medium", "danger": 1, "has_secret": true,
+		})
+	for i in range(10):
+		sink.poll(1.0)
+	_check_eq(observed.count, 100, "Large batches are split without dropping events")
+	_check(observed.max_bytes <= 65536, "All POST bodies fit director 64KiB limit")
+	_check(!GameTelemetrySink._is_valid_traceparent("00-zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz-1111111111111111-01"), "Trace context rejects nonhex")
+	sink.free()
+	_end()
+
+
+func _test_normalized_outcome_and_failing_provider() -> void:
+	for scenario in ["normalized", "provider_failure", "invalid_plan"]:
+		var sink := GameTelemetrySink.new()
+		sink.enabled = true
+		var events: Array[Dictionary] = []
+		sink.custom_http_post = func(_url, _headers, body, done):
+			var parsed: Dictionary = JSON.parse_string(body)
+			_batches.append(body)
+			for event in parsed.events:
+				events.append(event)
+			done.call(true, parsed.events.size())
+		var state := GameState.new()
+		state.telemetry_sink = sink
+		state.enable_dynamic_world(1)
+		state.world.run_id = "test-run-1"
+		var transport := ScriptedTransport.new()
+		var coord := GenerationCoordinator.new(state, transport)
+		coord.telemetry_sink = sink
+		# Blank selectors: the server chooses the actual provider/model.
+		state.player_pos = Vector2i(4, 2)
+		coord.update()
+		var request: Dictionary = transport.submitted[0].request
+		var result: Dictionary
+		if scenario == "normalized":
+			state.world.tiles[Vector2i(-1, -4)] = GameState.TileType.WALL
+			var plan := StubDirector.simple_plan(request, "r-001", "small", ["west", "east"])
+			result = StubDirector.success_result(request, plan)
+		elif scenario == "invalid_plan":
+			var plan := StubDirector.simple_plan(request, "r-001", "small", ["east"])
+			plan.depth = 2
+			result = StubDirector.success_result(request, plan)
+		else:
+			result = StubDirector.ok_result(StubDirector.failure_body(request), 504)
+		var response: Dictionary = JSON.parse_string(result.body)
+		if scenario == "provider_failure":
+			response.metadata.error.code = "provider_timeout"
+		response.metadata.provider = "actual-provider"
+		response.metadata.model = "actual-model"
+		result.body = JSON.stringify(response)
+		transport.deliver(0, result)
+		sink.poll(1.0)
+		var outcomes: Array[String] = []
+		for event in events:
+			outcomes.append(event.event_name)
+		if scenario == "normalized":
+			_check(outcomes.has("generation.normalized"), "Pruned exit emits normalized decision")
+			_check(!outcomes.has("generation.accepted"), "Normalized decision is exclusive of accepted")
+			# Ignore the initial room's commit when comparing the generated lifecycle.
+			var generated := events.filter(func(e): return e.request_id == request.request_id)
+			var stages: Array[String] = []
+			for event in generated:
+				stages.append(event.event_name)
+			_check(stages.find("generation.normalized") < stages.find("room.committed"), "Normalization precedes its room commit")
+		else:
+			var fallback := events.filter(func(e): return e.event_name == "generation.fallback_applied")
+			_check_eq(fallback.size(), 1, "Fallback applied only once after successful placement")
+			_check_eq(fallback[0].attributes.provider, "actual-provider", "Fallback names actual failing provider, not empty selector")
+			_check_eq(fallback[0].attributes.model, "actual-model", "Fallback names actual failing model")
+			_check_eq(fallback[0].attributes.fallback_reason, "provider_timeout" if scenario == "provider_failure" else "rejected_by_game", "Fallback reason retains failure classification")
+			_check_eq(outcomes.has("generation.rejected"), scenario == "invalid_plan", "Only rejected game plans emit generation.rejected")
+			var committed := events.filter(func(e): return e.event_name == "room.committed" and e.request_id == request.request_id)
+			_check_eq(committed[0].attributes.provider, "rules-baseline", "Committed fallback attributes materializing baseline")
+			_check(committed[0].attributes.has("materialization_ms"), "Committed room contains client materialization timing")
+		sink.free()
 	_end()

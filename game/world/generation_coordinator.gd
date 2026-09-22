@@ -209,18 +209,16 @@ func _start(f: Dictionary) -> void:
 		return
 	last_generation_status = "generating"
 	var request := build_request(f, request_id)
-	in_flight[request_id] = {"key": f.key, "started": _now(), "request": request}
+	var queue_start := _now()
+	in_flight[request_id] = {"key": f.key, "started": queue_start, "request": request}
 
 	if telemetry_sink != null and telemetry_sink.has_method("enqueue_event"):
+		# generation.queued (attributes: frontier_id, depth, exit_direction)
 		var queued_attrs := {
 			"frontier_id": f.key,
 			"depth": WORLD_DEPTH,
 			"exit_direction": str(f.direction),
 		}
-		if provider != "":
-			queued_attrs["provider"] = provider
-		if model != "":
-			queued_attrs["model"] = model
 		telemetry_sink.enqueue_event("generation.queued", world.run_id, request_id, queued_attrs)
 
 	var validation := DungeonContracts.validate_generation_request(request)
@@ -228,6 +226,18 @@ func _start(f: Dictionary) -> void:
 		var finish_info := _finish(request_id)
 		_fallback(f, request_id, "invalid_request: %s" % validation.error, request, {}, finish_info.elapsed)
 		return
+
+	# generation.sent (attributes: frontier_id, depth, exit_direction, queue_ms)
+	if telemetry_sink != null and telemetry_sink.has_method("enqueue_event"):
+		var queue_ms := float(maxi(0, _now() - queue_start))
+		var sent_attrs := {
+			"frontier_id": f.key,
+			"depth": WORLD_DEPTH,
+			"exit_direction": str(f.direction),
+			"queue_ms": queue_ms,
+		}
+		telemetry_sink.enqueue_event("generation.sent", world.run_id, request_id, sent_attrs)
+
 	var options := {"provider": provider, "model": model, "timeout_sec": timeout_msec / 1000.0}
 	transport.submit(request, options, _on_result.bind(request_id, world))
 
@@ -292,6 +302,25 @@ func _on_result(result: Dictionary, request_id: String, world: RefCounted) -> vo
 func _resolve(f: Dictionary, request_id: String, result: Dictionary, late: bool, request: Dictionary = {}, elapsed_ms: float = -1.0) -> void:
 	var interpreted := _interpret(result, request_id)
 	var resp_meta: Dictionary = interpreted.get("metadata", {})
+
+	# Emit generation.response_received if transport returned a response
+	if result.get("transport_ok", false) and telemetry_sink != null and telemetry_sink.has_method("enqueue_event"):
+		var prov_recv := str(resp_meta.get("provider", provider))
+		if prov_recv == "":
+			prov_recv = "unknown"
+		var mod_recv := str(resp_meta.get("model", model))
+		if mod_recv == "":
+			mod_recv = "unknown"
+		var net_ms: float = elapsed_ms
+		if net_ms < 0.0:
+			net_ms = 0.0
+		var resp_attrs := {
+			"provider": prov_recv,
+			"model": mod_recv,
+			"network_ms": net_ms,
+		}
+		telemetry_sink.enqueue_event("generation.response_received", game_state.world.run_id, request_id, resp_attrs)
+
 	if not interpreted.ok:
 		if late:
 			game_state.world.log_event("late_invalid", f.key, {"request_id": request_id, "reason": interpreted.reason})
@@ -305,49 +334,6 @@ func _resolve(f: Dictionary, request_id: String, result: Dictionary, late: bool,
 	else:
 		placed = _place_plan(f, request_id, plan, "director", resp_meta)
 	if placed.ok:
-		if telemetry_sink != null and telemetry_sink.has_method("enqueue_event"):
-			var dur: float = float(resp_meta.latency_ms) if resp_meta.get("latency_ms") != null else elapsed_ms
-			var prov: String = str(resp_meta.get("provider", provider))
-			var mod: String = str(resp_meta.get("model", model))
-			var room_meta: Dictionary = placed.get("room", {}).get("meta", {})
-			var room_type: String = str(room_meta.get("room_type", plan.get("room_type", "room")))
-			var room_size: String = str(room_meta.get("size_used", plan.get("size", "medium")))
-			var danger: int = int(room_meta.get("danger", plan.get("danger", 1)))
-			var acc_attrs := {
-				"room_type": room_type,
-				"room_size": room_size,
-				"danger": danger,
-			}
-			if prov != "":
-				acc_attrs["provider"] = prov
-			if mod != "":
-				acc_attrs["model"] = mod
-			if dur >= 0.0:
-				acc_attrs["duration_ms"] = dur
-			telemetry_sink.enqueue_event("generation.accepted", game_state.world.run_id, request_id, acc_attrs)
-
-			# Check if plan was normalized
-			var norm_reason := ""
-			if room_meta.get("room_id_rewritten", false):
-				norm_reason = "duplicate_room_id_rewritten"
-			elif room_meta.get("repositioned", false):
-				norm_reason = "room_size_reduced"
-			elif not room_meta.get("pruned_exits", []).is_empty():
-				norm_reason = "exit_pruned"
-			if norm_reason != "":
-				var norm_attrs := {
-					"normalize_reason": norm_reason,
-					"room_type": room_type,
-					"room_size": room_size,
-					"danger": danger,
-				}
-				if prov != "":
-					norm_attrs["provider"] = prov
-				if mod != "":
-					norm_attrs["model"] = mod
-				if dur >= 0.0:
-					norm_attrs["duration_ms"] = dur
-				telemetry_sink.enqueue_event("generation.normalized", game_state.world.run_id, request_id, norm_attrs)
 
 		if recorder != null and not request.is_empty():
 			var room_seed := int(placed.get("room", {}).get("seed_used", game_state.world_seed))
@@ -402,6 +388,7 @@ func _place_plan(f: Dictionary, request_id: String, plan: Dictionary, source: St
 	var world: DungeonWorld = game_state.world
 	var base := plan.duplicate(true)
 	var placement_meta := meta.duplicate(true)
+	placement_meta["materialization_started_msec"] = Time.get_ticks_msec()
 	var proposed_room_id := str(base.get("room_id", "room"))
 	if world.rooms.has(proposed_room_id):
 		var unique_room_id := _unique_room_id(world, proposed_room_id, f.key, request_id)
@@ -479,32 +466,49 @@ func _fallback(
 	print("[dungeon-gen] fallback for %s: %s" % [f.key, reason])
 	game_state.log_message("Generation fell back to local rules (%s)." % reason.get_slice(":", 0))
 
-	if telemetry_sink != null and telemetry_sink.has_method("enqueue_event"):
-		# 1. generation.rejected
-		var rej_attrs := {"reject_reason": reason}
-		if provider != "":
-			rej_attrs["provider"] = provider
-		if model != "":
-			rej_attrs["model"] = model
-		if elapsed_ms >= 0.0:
-			rej_attrs["duration_ms"] = elapsed_ms
-		telemetry_sink.enqueue_event("generation.rejected", world.run_id, request_id, rej_attrs)
-
-		# 2. generation.fallback_applied
-		var fb_attrs := {
-			"fallback_reason": reason,
-			"provider": "rules-baseline",
-			"model": "builtin-v1",
-		}
-		if elapsed_ms >= 0.0:
-			fb_attrs["duration_ms"] = elapsed_ms
-		telemetry_sink.enqueue_event("generation.fallback_applied", world.run_id, request_id, fb_attrs)
+	var reject_reason := ""
+	var fallback_reason := "provider_error"
+	if reason.begins_with("plan_rejected"):
+		reject_reason = "placement_failure"
+		if reason.ends_with("depth_mismatch"):
+			reject_reason = "schema_invalid"
+		fallback_reason = "rejected_by_game"
+	elif reason.begins_with("invalid_response") or reason == "response_mismatch":
+		reject_reason = "schema_invalid"
+		fallback_reason = "schema_error"
+	elif reason.begins_with("invalid_request"):
+		fallback_reason = "schema_error"
+	elif reason == "timeout" or reason == "provider_timeout":
+		fallback_reason = "provider_timeout"
+	elif reason.begins_with("transport_failure") or reason.begins_with("http_error"):
+		fallback_reason = "transport_failure"
+	elif reason.begins_with("provider_failure"):
+		var code := reason.get_slice(":", 1)
+		if code == "provider_timeout":
+			fallback_reason = "provider_timeout"
+		elif code in ["schema_violation", "invalid_json", "empty_response", "unsupported_contract_version"]:
+			fallback_reason = "schema_error"
+		elif response_metadata.get("provider_metadata", {}).has("selection_error"):
+			fallback_reason = "selection_error"
+	var failed_provider := str(response_metadata.get("provider", provider))
+	var failed_model := str(response_metadata.get("model", model))
+	if failed_provider == "":
+		failed_provider = "unknown"
+	if failed_model == "":
+		failed_model = "unknown"
+	if reject_reason != "" and telemetry_sink != null:
+		telemetry_sink.enqueue_event("generation.rejected", world.run_id, request_id, {
+			"reject_reason": reject_reason, "provider": failed_provider, "model": failed_model,
+		})
 	last_provider = "rules-baseline"
 	last_model = "builtin-v1"
 	last_latency_ms = elapsed_ms if elapsed_ms >= 0.0 else -1.0
 	last_provider_metadata = {"fallback_reason": reason}
 	var fallback_metadata := {
 		"fallback_reason": reason,
+		"telemetry_fallback_reason": fallback_reason,
+		"failed_provider": failed_provider,
+		"failed_model": failed_model,
 		"provider": last_provider,
 		"model": last_model,
 		"latency_ms": last_latency_ms,
