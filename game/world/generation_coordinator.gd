@@ -19,6 +19,8 @@ extends RefCounted
 ## Late, duplicate or stale completions are routed to the world, which is the
 ## authority and refuses them without mutating anything.
 
+const GameTelemetrySink = preload("res://world/game_telemetry_sink.gd")
+
 const DungeonContracts = preload("res://contracts/dungeon_contracts.gd")
 const DungeonWorld = preload("res://world/dungeon_world.gd")
 const RoomGenerator = preload("res://generation/room_generator.gd")

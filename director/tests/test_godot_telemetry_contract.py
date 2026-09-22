@@ -101,15 +101,25 @@ def test_actual_godot_batches_match_python_contract(tmp_path):
     tracer.add_span_processor(SimpleSpanProcessor(exporter))
     telemetry = DirectorTelemetry(tracer_provider=tracer)
     recorder = GameTelemetryRecorder(telemetry, {})
-    linked = [event for event in events if event.traceparent ==
-              "00-1234567890abcdef1234567890abcdef-1234567890abcdef-01"]
+    linked = [
+        event
+        for event in events
+        if event.traceparent == "00-1234567890abcdef1234567890abcdef-1234567890abcdef-01"
+    ]
     assert {event.event_name.value for event in linked} >= {
-        "generation.response_received", "generation.accepted", "generation.normalized",
-        "generation.rejected", "generation.fallback_applied", "room.committed",
-        "door.revealed", "room.entered",
+        "generation.response_received",
+        "generation.accepted",
+        "generation.normalized",
+        "generation.rejected",
+        "generation.fallback_applied",
+        "room.committed",
+        "door.revealed",
+        "room.entered",
     }
-    assert any(event.attributes.get("normalize_reason") == "duplicate_room_id_rewritten"
-               for event in linked)
+    assert any(
+        event.attributes.get("normalize_reason") == "duplicate_room_id_rewritten"
+        for event in linked
+    )
     for event in linked:
         recorder.record(event.model_dump(mode="json", exclude_none=True))
     spans = exporter.get_finished_spans()
