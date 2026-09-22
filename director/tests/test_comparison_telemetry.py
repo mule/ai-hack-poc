@@ -5,6 +5,14 @@ from dataclasses import replace
 from datetime import UTC, datetime
 
 import pytest
+from benchmarks import replay
+from fakes import FakeProvider, make_request
+from opentelemetry import trace
+from opentelemetry.sdk._logs import LoggerProvider
+from opentelemetry.sdk._logs.export import InMemoryLogRecordExporter, SimpleLogRecordProcessor
+from shadow_fakes import GatedProvider, eventually
+from test_telemetry import Harness
+
 from dungeon_director.comparison_telemetry import (
     ComparisonTelemetry,
     comparison_summary,
@@ -17,14 +25,6 @@ from dungeon_director.registry import ProviderRegistry
 from dungeon_director.service import DirectorService
 from dungeon_director.settings import DirectorSettings, ShadowSettings, ShadowTarget
 from dungeon_director.shadow import ComparisonMeta, ExecutionRecord, ExecutionRole, ExecutionStatus
-from fakes import FakeProvider, make_request
-from opentelemetry import trace
-from opentelemetry.sdk._logs import LoggerProvider
-from opentelemetry.sdk._logs.export import InMemoryLogRecordExporter, SimpleLogRecordProcessor
-from shadow_fakes import GatedProvider, eventually
-from test_telemetry import Harness
-
-from benchmarks import replay
 
 
 @pytest.fixture
