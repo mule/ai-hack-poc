@@ -9,7 +9,9 @@ canonical outcomes, including details deliberately omitted from telemetry.
 
 The app registers the comparison observer through DirectorService's
 `shadow_observers` interface; library callers can use the same interface.
-It retains at most 256 comparisons, each with at most the active result
+The application bounds retained comparisons using `DIRECTOR_SHADOW_STORE_SIZE`
+(default 128, maximum 1024). Direct library construction defaults to 256.
+Each comparison retains at most the active result
 and four shadow results. It emits each active/shadow pair when both are available,
 regardless of completion order. Evicted work cannot recreate old state; its later
 execution status is still exported. SDK batch processors perform remote export in

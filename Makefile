@@ -222,3 +222,7 @@ export-android: ## Export headless Android debug APK
 clean: ## Remove the director virtualenv, Python caches, and build output
 	rm -rf $(VENV) director/.pytest_cache director/.ruff_cache director/*.egg-info director/build director/dist game/builds
 	find director -type d -name __pycache__ -prune -exec rm -rf {} +
+
+.PHONY: openlit-smoke
+openlit-smoke: need-venv ## Verify fresh traces/logs/metrics in OpenLIT; see observability/openlit-runbook.md
+	@PYTHONPATH=director $(VENV_BIN)/python -m benchmarks.openlit_smoke $(SMOKE_ARGS)
