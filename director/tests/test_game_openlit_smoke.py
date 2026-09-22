@@ -58,6 +58,21 @@ def test_real_game_lifecycle_reaches_all_collector_signals(monkeypatch):
         attrs = {item.key: item.value.string_value for item in generation.attributes}
         assert attrs["director.run_id"] == evidence["run_id"]
         request_id = attrs["director.request_id"]
+        # Final room lifecycle spans must link the actual director span, not
+        # merely reuse request-ID attributes or invent a synthetic parent.
+        linked_events = set()
+        for span in spans:
+            span_attrs = {item.key: item.value.string_value for item in span.attributes}
+            if span_attrs.get("director.request_id") != request_id:
+                continue
+            name = span_attrs.get("game.event.name")
+            if name in {"room.committed", "room.entered"}:
+                assert any(
+                    link.trace_id == generation.trace_id and link.span_id == generation.span_id
+                    for link in span.links
+                ), f"{name} must link the director.generate span"
+                linked_events.add(name)
+        assert linked_events == {"room.committed", "room.entered"}
         entered = next(record for record in records if record.body.string_value == "room.entered")
         attrs = {item.key: item.value.string_value for item in entered.attributes}
         assert attrs["director.run_id"] == evidence["run_id"]

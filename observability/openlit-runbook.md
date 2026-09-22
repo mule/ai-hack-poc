@@ -165,10 +165,12 @@ In OpenLIT, filter `director.run_id` to this exact run and confirm:
 - `game.lifecycle.events`, `game.rooms.committed`, and `game.lifecycle.duration`
   metrics under resource `service.instance.id` equal to the run ID.
 
-The game and director correlate by run/request IDs; game events do not claim
-W3C parent linkage unless a real propagated context exists. Save authenticated
-query/UI evidence alongside the JSON rather than treating local HTTP delivery
-as proof of remote persistence.
+The game and director correlate by run/request IDs. The client propagates the
+director response trace context into committed-room and room-entry span links;
+the integration test verifies both the exact director trace ID and span ID.
+Startup/offline events without a director response carry no invented link.
+Save authenticated query/UI evidence alongside the JSON rather than treating
+local HTTP delivery as proof of remote persistence.
 
 The focused integration test uses a loopback OTLP collector and decodes actual
 protobuf output. It runs when Godot and the game telemetry implementation are
