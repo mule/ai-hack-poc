@@ -96,6 +96,7 @@ def _safe_meta_string(value: object) -> str | None:
         return None
     return value
 
+
 _TIMEOUT_ORIGINS = frozenset({"director_deadline", "provider"})
 
 # Mirrors telemetry.py's Outcome->schema-error mapping, kept local so this
@@ -158,6 +159,21 @@ _METADATA_ALLOWLIST = frozenset(
     }
 )
 _METADATA_MAX_ATTRIBUTES = 32
+_STRING_METADATA_KEYS = frozenset(
+    {
+        "jev_model",
+        "room_type_provider_choice",
+        "size_provider_choice",
+        "atmosphere_choice",
+        "cerebras_id",
+        "cerebras_model",
+        "finish_reason",
+        "groq_model",
+        "groq_request_id",
+        "service_tier",
+        "system_fingerprint",
+    }
+)
 
 #: Fields that carry the provider's own reported model id, checked in order.
 _RESPONSE_MODEL_KEYS = ("jev_model", "cerebras_model", "groq_model")
@@ -217,14 +233,20 @@ def _bounded_metadata_attributes(metadata: object) -> dict[str, Any]:
         if key not in _METADATA_ALLOWLIST and not _META_TIME_KEY_RE.match(key):
             continue
         attr = f"director.provider.meta.{key}"
-        if isinstance(value, bool):
-            attributes[attr] = value
-        elif isinstance(value, int) and -10_000_000 <= value <= 10_000_000:
-            attributes[attr] = value
-        elif isinstance(value, float) and math.isfinite(value):
-            attributes[attr] = round(value, 6)
-        elif (safe := _safe_meta_string(value)) is not None:
-            attributes[attr] = safe
+        if key in _STRING_METADATA_KEYS:
+            if (safe := _safe_meta_string(value)) is not None:
+                attributes[attr] = safe
+        elif key == "secret_allowed":
+            if isinstance(value, bool):
+                attributes[attr] = value
+        elif isinstance(value, int | float) and not isinstance(value, bool):
+            maximum = (
+                1.0
+                if key.endswith("_confidence") or key == "has_secret_probability"
+                else 1_000_000_000.0
+            )
+            if math.isfinite(value) and 0 <= value <= maximum:
+                attributes[attr] = round(value, 6)
     return attributes
 
 
@@ -250,7 +272,11 @@ def _usage_attributes(usage: object) -> dict[str, Any]:
     attributes: dict[str, Any] = {}
     input_tokens = usage.input_tokens
     output_tokens = usage.output_tokens
-    if isinstance(input_tokens, int) and not isinstance(input_tokens, bool) and 0 <= input_tokens <= 10_000_000:
+    if (
+        isinstance(input_tokens, int)
+        and not isinstance(input_tokens, bool)
+        and 0 <= input_tokens <= 10_000_000
+    ):
         attributes["gen_ai.usage.input_tokens"] = input_tokens
     if (
         isinstance(output_tokens, int)
@@ -263,7 +289,12 @@ def _usage_attributes(usage: object) -> dict[str, Any]:
             attributes["gen_ai.usage.input_tokens"] + attributes["gen_ai.usage.output_tokens"]
         )
     cost = usage.estimated_cost_usd
-    if isinstance(cost, int | float) and not isinstance(cost, bool) and math.isfinite(cost) and cost >= 0:
+    if (
+        isinstance(cost, int | float)
+        and not isinstance(cost, bool)
+        and math.isfinite(cost)
+        and cost >= 0
+    ):
         attributes["gen_ai.usage.cost"] = float(cost)
     return attributes
 
@@ -294,6 +325,7 @@ class ProviderTelemetry:
         model: str,
         execution_mode: str,
         parent: Any = None,
+        correlation: Mapping[str, str] | None = None,
     ) -> ProviderObservation:
         """Start the ``director.provider.invoke`` span for one adapter call.
 
@@ -306,7 +338,12 @@ class ProviderTelemetry:
         label_model = _label(model)
         span = self._start_span(
             {
+                **(correlation or {}),
                 "gen_ai.system": label_provider,
+                "gen_ai.provider.name": label_provider,
+                "gen_ai.operation.name": "chat"
+                if label_provider != "rules-baseline"
+                else "generate_room",
                 "gen_ai.request.model": label_model,
                 "director.provider.execution_mode": execution_mode,
             },
@@ -349,7 +386,9 @@ class ProviderObservation:
     span no terminal call reached. None of them raise.
     """
 
-    def __init__(self, telemetry: ProviderTelemetry, span: Span, *, provider: str, model: str) -> None:
+    def __init__(
+        self, telemetry: ProviderTelemetry, span: Span, *, provider: str, model: str
+    ) -> None:
         self._telemetry = telemetry
         self._span = span
         self._provider = provider
@@ -378,29 +417,31 @@ class ProviderObservation:
         if self._done:
             return
         self._done = True
-        attributes: dict[str, Any] = {
-            "director.provider.outcome": outcome.value,
-            "gen_ai.system": self._provider,
-            "gen_ai.request.model": self._model,
-            "gen_ai.response.model": _response_model(provider_metadata, self._model),
-        }
-        if outcome is ProviderOutcome.SUCCESS:
-            attributes["director.provider.schema_valid"] = True
-        elif outcome is ProviderOutcome.SCHEMA_ERROR:
-            attributes["director.provider.schema_valid"] = False
-        if outcome is not ProviderOutcome.SUCCESS and error_code != NONE:
-            attributes["director.provider.error_code"] = error_code
-        if timeout_origin in _TIMEOUT_ORIGINS:
-            attributes["director.provider.timeout_origin"] = timeout_origin
-        if call_duration_s is not None:
-            attributes["director.provider.call_duration_ms"] = call_duration_s * 1000.0
-        attributes.update(_usage_attributes(usage))
-        attributes.update(_bounded_metadata_attributes(provider_metadata))
+        try:
+            attributes: dict[str, Any] = {
+                "director.provider.outcome": outcome.value,
+                "gen_ai.system": self._provider,
+                "gen_ai.request.model": self._model,
+                "gen_ai.response.model": _response_model(provider_metadata, self._model),
+            }
+            if outcome is ProviderOutcome.SUCCESS:
+                attributes["director.provider.schema_valid"] = True
+            elif outcome is ProviderOutcome.SCHEMA_ERROR:
+                attributes["director.provider.schema_valid"] = False
+            if outcome is not ProviderOutcome.SUCCESS and error_code != NONE:
+                attributes["director.provider.error_code"] = error_code
+            if timeout_origin in _TIMEOUT_ORIGINS:
+                attributes["director.provider.timeout_origin"] = timeout_origin
+            if call_duration_s is not None:
+                attributes["director.provider.call_duration_ms"] = call_duration_s * 1000.0
+            attributes.update(_usage_attributes(usage))
+            attributes.update(_bounded_metadata_attributes(provider_metadata))
 
-        telemetry = self._telemetry
-        telemetry._set_attributes(self._span, attributes)
-        telemetry._set_status(self._span, outcome, error_code)
-        telemetry._end_span(self._span)
+            telemetry = self._telemetry
+            telemetry._set_attributes(self._span, attributes)
+            telemetry._set_status(self._span, outcome, error_code)
+        finally:
+            self._telemetry._end_span(self._span)
 
     def cancel(self, *, call_duration_s: float | None = None) -> None:
         """The request task was cancelled while this provider call was in flight."""

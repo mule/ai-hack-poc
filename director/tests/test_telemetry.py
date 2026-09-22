@@ -568,9 +568,7 @@ def test_tokens_and_cost_are_omitted_when_not_reported(harness):
     metrics = harness.metrics()
     assert "director.generation.tokens" not in metrics
     assert "director.generation.cost" not in metrics
-    assert not [
-        k for k in harness.only_provider_span().attributes if k.startswith("gen_ai.usage")
-    ]
+    assert not [k for k in harness.only_provider_span().attributes if k.startswith("gen_ai.usage")]
 
 
 def test_partial_usage_records_only_what_was_reported(harness):
