@@ -143,6 +143,33 @@ Code lives in `world/`; `GameState` owns a `DungeonWorld` and `MainGame` drives 
 | `DUNGEON_DIRECTOR_URL` | Director base URL (default `http://127.0.0.1:8000`); `offline` skips the network and always uses local rules |
 | `DUNGEON_DIRECTOR_PROVIDER` / `DUNGEON_DIRECTOR_MODEL` | Optional stable ids sent as `?provider=&model=` |
 | `DUNGEON_DIRECTOR_TIMEOUT` | Request timeout in seconds (default 5) |
+| `DUNGEON_TELEMETRY_URL` | Optional telemetry collector base URL (defaults to `DUNGEON_DIRECTOR_URL` or `http://127.0.0.1:8000`); `offline` disables telemetry |
+| `DUNGEON_TELEMETRY_ENABLED` | Set to `false`/`0` to disable the telemetry sink |
+
+## Game Lifecycle Telemetry (Issue #25)
+
+The game runtime includes an asynchronous, bounded telemetry sink (`game/world/game_telemetry_sink.gd`) emitting batch `POST /v1/telemetry/game` events conforming to the canonical OpenTelemetry lifecycle schema.
+
+- **Non-blocking Execution**: Gameplay never stalls on telemetry queues, serialization, or network latency.
+- **Queue Bounds & Safe Backpressure**: Bounded queue (`max_queue_size=256`). When full, older events are safely dropped with explicit drop counters (`dropped_backpressure`, `dropped_invalid`, `dropped_payload_limit`, `dropped_total`).
+- **Batching**: Automatic flushing at configurable intervals (`flush_interval_sec=0.2`) or batch sizes (`batch_size=20`, up to 100 events per batch, capped at 1MB).
+- **Attribute Allowlisting & Redaction**: Strict per-event attribute allowlists (`room_type`, `room_size`, `danger`, `exit_direction`, `duration_ms`, `time_to_entry_ms`, etc.). Scalar bounds and enum validation are enforced. Sensitive tokens (`Bearer`, `sk-`, `password`, `prompt`, `raw_payload`) are automatically redacted.
+- **Correlated Events**:
+  - `frontier.discovered`: Emitted when room exits or breaches are discovered.
+  - `door.revealed`: Emitted when doors are revealed for unresolved exits.
+  - `generation.queued`: Emitted when an unresolved frontier enters prefetch / generation.
+  - `generation.accepted`: Emitted upon successful generation response acceptance.
+  - `generation.normalized`: Emitted when director plan was adjusted to fit geometry.
+  - `generation.rejected`: Emitted on plan rejection or transport/timeout failures.
+  - `generation.fallback_applied`: Emitted when falling back to rules-baseline.
+  - `room.committed`: Emitted when a room is permanently placed and committed into the world.
+  - `room.entered`: Emitted when the player enters a new room, tracking `time_to_entry_ms`.
+
+### Running Game Telemetry Tests
+
+```bash
+godot --headless --path game -s res://tests/test_game_telemetry.gd
+```
 
 ### Limitations
 

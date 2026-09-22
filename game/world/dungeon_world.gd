@@ -61,6 +61,9 @@ var counters := {
 	"breaches": 0,
 }
 
+## Optional telemetry sink for lifecycle events (Issue #25).
+var telemetry_sink: Variant = null
+
 var _log_seq := 0
 ## outward cell -> frontier key for every open (unresolved/pending) frontier.
 var _outward_index: Dictionary = {}
@@ -119,8 +122,14 @@ func open_frontier_leading_to(pos: Vector2i) -> Dictionary:
 
 
 func room_id_at(pos: Vector2i) -> String:
-	for room_id in room_order:
-		if rooms[room_id].bounds.has_point(pos):
+	# Search most recently committed rooms first (children before parents)
+	for i in range(room_order.size() - 1, -1, -1):
+		var room_id: String = room_order[i]
+		var r: Dictionary = rooms[room_id]
+		if r.tiles.has(pos):
+			if r.tiles[pos] != GeneratedRoom.TileType.WALL:
+				return room_id
+		elif r.get("link_pos") != null and r.link_pos == pos:
 			return room_id
 	return ""
 
@@ -309,6 +318,19 @@ func open_breach(probe_for: Callable, near: Vector2i, turn: int) -> Dictionary:
 		counters.breaches += 1
 		revision += 1
 		_log("breach", key, {"room_id": room_id})
+		if telemetry_sink != null and telemetry_sink.has_method("enqueue_event"):
+			telemetry_sink.enqueue_event(
+				"frontier.discovered",
+				run_id,
+				null,
+				{"frontier_id": key, "depth": 1, "exit_direction": direction}
+			)
+			telemetry_sink.enqueue_event(
+				"door.revealed",
+				run_id,
+				null,
+				{"room_id": room_id, "frontier_id": key, "exit_direction": direction, "door_kind": "door"}
+			)
 		return {"ok": true, "frontier": record}
 	return {"ok": false, "reason": "no_candidate"}
 
@@ -522,8 +544,55 @@ func _commit_room(room: GeneratedRoom, placement: Dictionary, parent_key: String
 		"seed_used": room.seed_used,
 		"meta": meta.duplicate(),
 		"diagnostics": room.diagnostics.duplicate(),
+		"committed_at_msec": Time.get_ticks_msec(),
 	}
 	rooms[room.room_id] = record
 	room_order.append(room.room_id)
 	revision += 1
+
+	if telemetry_sink != null and telemetry_sink.has_method("enqueue_event"):
+		# 1. room.committed event
+		var room_req_id: Variant = frontiers[parent_key].request_id if parent_key != "" and frontiers.has(parent_key) else null
+		if room_req_id == null or str(room_req_id) == "":
+			room_req_id = "req-%s-init" % run_id
+		var room_type := str(meta.get("room_type", "room"))
+		var room_size := str(meta.get("size_used", "medium"))
+		var danger := int(meta.get("danger", 1))
+		var duration: Variant = meta.get("latency_ms", null)
+		var committed_attrs := {
+			"room_id": room.room_id,
+			"room_type": room_type,
+			"room_size": room_size,
+			"danger": danger,
+		}
+		if parent_key != "":
+			committed_attrs["frontier_id"] = parent_key
+		if duration != null and float(duration) >= 0.0:
+			committed_attrs["duration_ms"] = float(duration)
+		telemetry_sink.enqueue_event("room.committed", run_id, room_req_id, committed_attrs)
+
+		# 2. frontier.discovered & door.revealed for newly created unresolved exits
+		for exit_entry in exits:
+			var dir: String = exit_entry.direction
+			var f_key := frontier_key(room.room_id, dir)
+			var f_rec: Dictionary = frontiers.get(f_key, {})
+			if f_rec.get("status") == STATUS_UNRESOLVED:
+				telemetry_sink.enqueue_event(
+					"frontier.discovered",
+					run_id,
+					null,
+					{"frontier_id": f_key, "depth": 1, "exit_direction": dir}
+				)
+				telemetry_sink.enqueue_event(
+					"door.revealed",
+					run_id,
+					null,
+					{
+						"room_id": room.room_id,
+						"frontier_id": f_key,
+						"exit_direction": dir,
+						"door_kind": str(exit_entry.get("kind", "door")),
+					}
+				)
+
 	return record

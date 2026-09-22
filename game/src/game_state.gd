@@ -64,6 +64,8 @@ var player_turns: int = 0
 var is_player_dead: bool = false
 var active_provider: String = ""
 var active_model: String = ""
+var telemetry_sink: Variant = null
+var current_room_id: String = ""
 
 
 # Entities
@@ -116,6 +118,8 @@ func log_message(msg: String) -> void:
 func _build_start_world() -> void:
 	world = DungeonWorld.new()
 	world.run_id = _new_run_id()
+	if telemetry_sink != null:
+		world.telemetry_sink = telemetry_sink
 	map_tiles = world.tiles
 	var room := RoomGenerator.generate(START_PLAN, ("%d|start" % world_seed).hash())
 	var res: Dictionary = world.commit_start_room(room, Vector2i.ZERO, 0)
@@ -123,6 +127,7 @@ func _build_start_world() -> void:
 	var record: Dictionary = res.room
 	record.meta = {"room_type": START_PLAN.room_type, "danger": START_PLAN.danger}
 	player_pos = room.player_spawn
+	current_room_id = room.room_id
 	_spawn_room_entities(record)
 
 func _new_run_id() -> String:
@@ -305,6 +310,7 @@ func player_action_step(dir: Vector2i) -> bool:
 	# 3. Check if tile is walkable floor/open door
 	if is_walkable(target_pos):
 		player_pos = target_pos
+		_check_room_transition()
 		# Check for items on this tile
 		_pickup_item_at(player_pos)
 		_process_turn()
@@ -419,3 +425,33 @@ func _process_enemy_turns() -> void:
 				var cand_pos_alt: Vector2i = epos + alt_dir
 				if cand_pos_alt != player_pos and is_walkable(cand_pos_alt) and get_enemy_at(cand_pos_alt).is_empty():
 					enemy["pos"] = cand_pos_alt
+
+
+func _check_room_transition() -> void:
+	if world == null:
+		return
+	var new_room_id := world.room_id_at(player_pos)
+	if new_room_id == "" or new_room_id == current_room_id:
+		return
+	current_room_id = new_room_id
+	if telemetry_sink != null and telemetry_sink.has_method("enqueue_event"):
+		var time_to_entry: Variant = null
+		if world.rooms.has(new_room_id):
+			var r_rec: Dictionary = world.rooms[new_room_id]
+			var committed_at: Variant = r_rec.get("committed_at_msec", null)
+			if committed_at != null:
+				time_to_entry = float(maxi(0, Time.get_ticks_msec() - int(committed_at)))
+		var attrs := {
+			"room_id": new_room_id,
+			"turn": player_turns,
+		}
+		if time_to_entry != null:
+			attrs["time_to_entry_ms"] = time_to_entry
+		var req_id: Variant = null
+		if world.rooms.has(new_room_id):
+			var pf: String = world.rooms[new_room_id].get("parent_frontier", "")
+			if pf != "" and world.frontiers.has(pf):
+				req_id = world.frontiers[pf].get("request_id", null)
+		if req_id == null or str(req_id) == "":
+			req_id = "req-%s-init" % world.run_id
+		telemetry_sink.enqueue_event("room.entered", world.run_id, req_id, attrs)
