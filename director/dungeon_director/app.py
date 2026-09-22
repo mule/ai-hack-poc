@@ -5,6 +5,11 @@ Endpoints:
 ``GET  /health``       liveness probe
 ``GET  /v1/config``    default and registered provider/model identifiers (no secrets);
                        plus a ``shadow`` object only while shadow evaluation is enabled
+``GET  /v1/telemetry/health``
+                        safe telemetry diagnostics: per-signal configuration validity
+                        and export state (fixed words, endpoint origins only — never
+                        header values or credentials); present regardless of state so
+                        operators can tell "off" from "failing"
 ``POST /v1/generate``  canonical :class:`GenerationRequest` in, canonical
                        :class:`GenerationResponse` out
 
@@ -38,6 +43,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import threading
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from typing import Annotated, Any
@@ -61,6 +67,9 @@ logger = logging.getLogger(__name__)
 _SERVICE_NAME = "dungeon-director"
 _GENERATE_PATH = "/v1/generate"
 _MAX_SELECTOR_CHARS = 128
+#: Hard cap on telemetry export shutdown; exporter timeouts are bounded to
+#: at most 30 s each, so 30 s only ever trips with a pathologically stuck SDK.
+TELEMETRY_SHUTDOWN_TIMEOUT_SECONDS = 30.0
 COMPARISON_ID_HEADER = "X-Shadow-Comparison-Id"
 
 
@@ -131,9 +140,24 @@ def create_app(
                     # Best-effort per provider; cancellation propagates.
                     await registry.aclose()
                 finally:
-                    # Export shutdown can block on an unreachable collector.
+                    # Export shutdown can block on an unreachable collector;
+                    # exporter timeouts are bounded, and this daemon-thread
+                    # join with a hard cap keeps a dead collector from hanging
+                    # director shutdown (an abandoned export thread dies with
+                    # the process instead).
+                    def _bound_telemetry_shutdown() -> None:
+                        worker = threading.Thread(
+                            target=telemetry.shutdown,
+                            name="telemetry-shutdown",
+                            daemon=True,
+                        )
+                        worker.start()
+                        worker.join(TELEMETRY_SHUTDOWN_TIMEOUT_SECONDS)
+                        if worker.is_alive():
+                            logger.warning("telemetry shutdown timed out; export abandoned")
+
                     try:
-                        await asyncio.to_thread(telemetry.shutdown)
+                        await asyncio.to_thread(_bound_telemetry_shutdown)
                     except Exception as exc:
                         logger.warning("telemetry shutdown failed (%s)", type(exc).__name__)
 
@@ -144,6 +168,15 @@ def create_app(
     @app.get("/health")
     def health() -> dict[str, str]:
         return {"status": "ok", "service": _SERVICE_NAME}
+
+    @app.get("/v1/telemetry/health")
+    def telemetry_health() -> dict[str, Any]:
+        """Safe telemetry diagnostics (see ``DirectorTelemetry.describe``)."""
+        try:
+            return app.state.telemetry.describe()
+        except Exception as exc:
+            logger.warning("telemetry diagnostics failed (%s)", type(exc).__name__)
+            return {"enabled": False}
 
     @app.get("/v1/config", response_model=DirectorConfig, response_model_exclude_none=True)
     def config() -> DirectorConfig:
