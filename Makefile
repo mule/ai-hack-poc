@@ -153,6 +153,12 @@ godot-test: ## Run Godot tests headlessly (mechanics plus optional contract, gen
 	else \
 		echo "game/tests/test_provider_selector.gd not present: skipping provider selector test"; \
 	fi
+	@if test -f game/tests/test_game_telemetry.gd; then \
+		echo "Running game telemetry sink test (#25)"; \
+		$(call godot_run,-s res://tests/test_game_telemetry.gd,$(GODOT_LOG_DIR)/godot-game-telemetry.log,SUCCESS: All game telemetry checks passed!); \
+	else \
+		echo "game/tests/test_game_telemetry.gd not present: skipping game telemetry test"; \
+	fi
 
 simulate: ## Headless dungeon simulation: offline rules baseline, 5 runs x 100 steps. SIM_ARGS='...' SIM_OUT=dir
 	@test -f game/simulation/run_simulation.gd || { echo "game/simulation/run_simulation.gd not found"; exit 1; }

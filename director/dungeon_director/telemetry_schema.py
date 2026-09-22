@@ -258,11 +258,12 @@ _NORMALIZE_REASONS = frozenset(
         "exit_direction_reassigned",
         "secret_probability_clamped",
         "exit_pruned",
+        "duplicate_room_id_rewritten",
+        "room_size_reduced",
     }
 )
-#: duplicate_room_id / placement_failure are blocking: the game cannot safely
-#: adjust its way out of them (unlike exit_pruned, a normalize case), so the
-#: room is rejected outright and a fallback follows.
+#: Reject reasons describe unrecovered placement failures. Successful ID rewrites
+#: and footprint reductions use their distinct normalization reasons above.
 _REJECT_REASONS = frozenset(
     {"schema_invalid", "policy_violation", "empty_room", "duplicate_room_id", "placement_failure"}
 )

@@ -7,6 +7,7 @@ const GameUI = preload("res://src/game_ui.gd")
 const GenerationClient = preload("res://world/generation_client.gd")
 const GenerationCoordinator = preload("res://world/generation_coordinator.gd")
 const OfflineTransport = preload("res://world/offline_transport.gd")
+const GameTelemetrySink = preload("res://world/game_telemetry_sink.gd")
 
 # Director endpoint. Provider/model ids are optional and stable; the game has
 # no provider-specific logic. Environment variables (desktop / CI):
@@ -29,6 +30,7 @@ var state: RefCounted
 ## environment in _ready().
 var generation_transport: Variant = null
 var coordinator: RefCounted = null
+var telemetry_sink: Variant = null
 var _seen_revision: int = -1
 
 var selected_provider := ""
@@ -37,12 +39,21 @@ var selected_model := ""
 func _ready() -> void:
 	selected_provider = OS.get_environment("DUNGEON_DIRECTOR_PROVIDER").strip_edges()
 	selected_model = OS.get_environment("DUNGEON_DIRECTOR_MODEL").strip_edges()
+	if telemetry_sink == null:
+		telemetry_sink = GameTelemetrySink.new()
+		add_child(telemetry_sink)
 	if state == null:
 		state = GameState.new()
 		state.active_provider = selected_provider
 		state.active_model = selected_model
+		state.telemetry_sink = telemetry_sink
 		state.enable_dynamic_world(1)
 	else:
+		state.active_provider = selected_provider
+		state.active_model = selected_model
+		state.telemetry_sink = telemetry_sink
+		if state.world != null:
+			state.world.telemetry_sink = telemetry_sink
 		state.active_provider = selected_provider
 		state.active_model = selected_model
 	renderer.game_state = state
@@ -76,12 +87,15 @@ func _setup_generation() -> void:
 	coordinator = GenerationCoordinator.new(state, generation_transport)
 	coordinator.provider = selected_provider
 	coordinator.model = selected_model
+	coordinator.telemetry_sink = telemetry_sink
 	coordinator.timeout_msec = int(coordinator_timeout_sec() * 1000.0)
 
 
 func _exit_tree() -> void:
 	if coordinator != null:
 		coordinator.shutdown()
+	if telemetry_sink != null and telemetry_sink.has_method("shutdown"):
+		telemetry_sink.shutdown()
 
 func make_transport() -> Variant:
 	var url := OS.get_environment("DUNGEON_DIRECTOR_URL").strip_edges()
