@@ -967,18 +967,30 @@ class DirectorTelemetry:
         self, request: GenerationRequest, *, is_shadow: bool = False
     ) -> GenerationObservation:
         """Start the ``director.generate`` span for one generation."""
-        mode = "shadow" if is_shadow else "active"
-        span = self._start_span(
-            {
-                "director.request_id": request.request_id,
-                "director.run_id": request.run_id,
-                "director.depth": request.state.depth,
-                "director.is_shadow": is_shadow,
-                "director.execution_mode": mode,
-                "director.retry_count": 0,
-            }
+        from dungeon_director.comparison_telemetry import (
+            current_correlation,
+            current_parent_context,
         )
-        return GenerationObservation(self, span, execution_mode=mode)
+
+        correlation = current_correlation()
+        mode = "shadow" if is_shadow else correlation.get("execution_mode", "active")
+        attributes = {
+            **correlation,
+            "director.request_id": request.request_id,
+            "director.run_id": request.run_id,
+            "director.depth": request.state.depth,
+            "director.is_shadow": is_shadow,
+            "director.execution_mode": mode,
+            "director.retry_count": 0,
+        }
+        span = self._start_span(attributes, parent=current_parent_context())
+        observation = GenerationObservation(self, span, execution_mode=mode)
+        observation._correlation = {
+            **correlation,
+            "director.request_id": request.request_id,
+            "director.run_id": request.run_id,
+        }
+        return observation
 
     def record_invalid_request(self, *, request_id: object = None, run_id: object = None) -> None:
         """Record a ``/v1/generate`` request rejected by FastAPI (HTTP 422).
@@ -1133,9 +1145,11 @@ class DirectorTelemetry:
 
     # -- guarded primitives (used by observations) -------------------------
 
-    def _start_span(self, attributes: Mapping[str, Any]) -> Span:
+    def _start_span(self, attributes: Mapping[str, Any], parent: Any = None) -> Span:
         try:
-            return self._tracer.start_span(SPAN_NAME, kind=SpanKind.SERVER, attributes=attributes)
+            return self._tracer.start_span(
+                SPAN_NAME, context=parent, kind=SpanKind.SERVER, attributes=attributes
+            )
         except Exception as exc:
             logger.warning("telemetry span start failed (%s)", type(exc).__name__)
             return INVALID_SPAN
@@ -1214,6 +1228,31 @@ class GenerationObservation:
         self._execution_mode = execution_mode
         self._started = time.perf_counter()
         self._done = False
+        self._correlation: dict[str, str] = {}
+
+    @property
+    def execution_mode(self) -> str:
+        return self._execution_mode
+
+    @property
+    def correlation_attributes(self) -> dict[str, str]:
+        return dict(self._correlation)
+
+    @_never_raises
+    def correlate(self, comparison_id: str) -> None:
+        self._correlation["shadow_comparison_id"] = comparison_id
+        self._telemetry._set_attributes(self._span, {"shadow_comparison_id": comparison_id})
+
+    @property
+    def traceparent(self) -> str | None:
+        try:
+            from opentelemetry.trace.propagation.tracecontext import TraceContextTextMapPropagator
+
+            carrier: dict[str, str] = {}
+            TraceContextTextMapPropagator().inject(carrier, context=self.context)
+            return carrier.get("traceparent")
+        except Exception:
+            return None
 
     def finish(
         self,
@@ -1266,6 +1305,24 @@ class GenerationObservation:
         if not self._done:
             self._done = True
             self._telemetry._end_span(self._span)
+
+    @property
+    def context(self) -> Any:
+        """The :mod:`opentelemetry.context` ``Context`` carrying this span.
+
+        For a child span (the #24 provider-call span) to parent onto this
+        observation explicitly — never through ambient/"current span"
+        propagation, which concurrent shadow tasks could leak into each
+        other. Never raises; a telemetry failure here just means the child
+        span falls back to no explicit parent.
+        """
+        try:
+            from opentelemetry import trace  # noqa: PLC0415
+
+            return trace.set_span_in_context(self._span)
+        except Exception as exc:
+            logger.warning("telemetry context lookup failed (%s)", type(exc).__name__)
+            return None
 
     # ----------------------------------------------------------------------
 

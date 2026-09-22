@@ -70,6 +70,12 @@ from dungeon_director.errors import (
     ProviderSelectionError,
     SelectionReason,
 )
+from dungeon_director.provider_telemetry import (
+    ProviderObservation,
+    ProviderOutcome,
+    ProviderTelemetry,
+    outcome_for_error_code,
+)
 from dungeon_director.providers import PlanPayload, ProviderResult
 from dungeon_director.registry import ProviderRegistry
 from dungeon_director.settings import DirectorSettings
@@ -132,6 +138,7 @@ class GenerationOutcome:
     response: GenerationResponse
     status_code: int
     comparison_id: str | None = None
+    traceparent: str | None = None
 
 
 @dataclass(slots=True)
@@ -163,6 +170,10 @@ class DirectorService:
         self._registry = registry
         self._settings = settings
         self._telemetry = telemetry if telemetry is not None else DirectorTelemetry(enabled=False)
+        # Built from the same TracerProvider director.generate spans use (real,
+        # no-op, or broken alike): a #24 provider span is always a proper
+        # child, and a broken tracer degrades this exactly like DirectorTelemetry.
+        self._provider_telemetry = ProviderTelemetry(self._telemetry.tracer_provider)
         try:
             registry.select(settings.default_provider, settings.default_model)
         except ProviderSelectionError as exc:
@@ -189,6 +200,36 @@ class DirectorService:
         """
         if self.shadow is not None:
             await self.shadow.aclose()
+
+    def _begin_provider_observation(
+        self,
+        parent: GenerationObservation | None,
+        provider: str,
+        model: str,
+        *,
+        shadow: bool,
+    ) -> ProviderObservation | None:
+        """Start the #24 provider-call child span, parented off ``parent``.
+
+        ``parent`` is the request's own ``GenerationObservation`` (may be
+        ``None`` if the outer span itself failed to start); its ``.context``
+        is the explicit parent context, never ambient/current-span state.
+        """
+        try:
+            return self._provider_telemetry.begin(
+                provider=provider,
+                model=model,
+                execution_mode=parent.execution_mode
+                if parent is not None
+                else "shadow"
+                if shadow
+                else "active",
+                parent=parent.context if parent is not None else None,
+                correlation=parent.correlation_attributes if parent is not None else None,
+            )
+        except Exception as exc:
+            logger.warning("provider telemetry start failed (%s)", type(exc).__name__)
+            return None
 
     def _begin_observation(
         self, request: GenerationRequest, is_shadow: bool
@@ -227,15 +268,22 @@ class DirectorService:
 
         comparison: ShadowComparison | None = None
 
-        def start_shadows(selected_provider: str, selected_model: str) -> None:
+        def start_shadows(
+            selected_provider: str, selected_model: str, parent: GenerationObservation | None
+        ) -> None:
             nonlocal comparison
             evaluator = self.shadow
             if evaluator is None or not evaluator.enabled:
                 return
             try:
                 comparison = evaluator.begin(
-                    request, provider=selected_provider, model=selected_model
+                    request,
+                    provider=selected_provider,
+                    model=selected_model,
+                    parent_context=parent.context if parent is not None else None,
                 )
+                if parent is not None:
+                    _observe(parent.correlate, comparison.comparison_id)
             except Exception as exc:  # shadow machinery must never fail the active call
                 logger.error("shadow evaluation could not start: %s", type(exc).__name__)
 
@@ -272,7 +320,7 @@ class DirectorService:
         model: str | None,
         *,
         timeout_seconds: float,
-        on_selected: Callable[[str, str], None] | None = None,
+        on_selected: Callable[[str, str, GenerationObservation | None], None] | None = None,
         shadow: bool = False,
     ) -> GenerationOutcome:
         """Observe one execution without letting instrumentation change its outcome."""
@@ -317,6 +365,11 @@ class DirectorService:
                     provider_latency_s=context.provider_duration_s,
                     selection_failed=context.selection_failed,
                 )
+            if observation is not None:
+                try:
+                    outcome = replace(outcome, traceparent=observation.traceparent)
+                except Exception as exc:
+                    logger.warning("telemetry response context failed (%s)", type(exc).__name__)
             return outcome
         finally:
             if observation is not None:
@@ -329,7 +382,7 @@ class DirectorService:
         model: str | None,
         *,
         timeout_seconds: float,
-        on_selected: Callable[[str, str], None] | None,
+        on_selected: Callable[[str, str, GenerationObservation | None], None] | None,
         shadow: bool,
         observation: _ExecutionObservation,
     ) -> GenerationOutcome:
@@ -342,6 +395,11 @@ class DirectorService:
         started_at = datetime.now(UTC)
         started = time.perf_counter()
         tag = "shadow " if shadow else ""
+
+        # Set once a provider/model is selected (below); stays None for a
+        # selection failure, so fail() never creates a span for a call that
+        # never happened.
+        provider_observation: ProviderObservation | None = None
 
         def fail(
             code: ErrorKind,
@@ -367,6 +425,21 @@ class DirectorService:
                 provider_metadata=provider_metadata,
             )
             response.metadata.latency_ms = _elapsed_ms(started)
+            if provider_observation is not None:
+                timeout_origin = (
+                    provider_metadata.get("timeout_origin")
+                    if isinstance(provider_metadata, dict)
+                    else None
+                )
+                _observe(
+                    provider_observation.complete,
+                    outcome_for_error_code(code),
+                    error_code=code.value,
+                    timeout_origin=timeout_origin if isinstance(timeout_origin, str) else None,
+                    call_duration_s=observation.provider_duration_s,
+                    usage=usage,
+                    provider_metadata=provider_metadata,
+                )
             return GenerationOutcome(response, status or status_for_error(code))
 
         try:
@@ -385,7 +458,11 @@ class DirectorService:
         observation.provider = provider_id
         observation.model = selection.model
         if on_selected is not None:
-            on_selected(provider_id, model)
+            on_selected(provider_id, model, observation.observation)
+
+        provider_observation = self._begin_provider_observation(
+            observation.observation, provider_id, model, shadow=shadow
+        )
 
         deadline = asyncio.timeout(timeout_seconds)
         call_started = time.perf_counter()
@@ -402,118 +479,145 @@ class DirectorService:
 
         try:
             try:
-                async with deadline:
-                    result = await selection.provider.generate(request, model=selection.model)
-            finally:
-                observation.provider_duration_s = time.perf_counter() - call_started
-        except TimeoutError:
-            if deadline.expired():
-                return deadline_missed()
-            # The provider raised TimeoutError itself (its own upstream timed out).
-            logger.warning("%sprovider %s/%s raised TimeoutError", tag, provider_id, model)
-            return fail(
-                ErrorKind.PROVIDER_TIMEOUT,
-                "Provider reported a timeout from its own upstream.",
-                provider_metadata={"timeout_origin": "provider"},
-            )
-        except ProviderError as exc:
-            # Log the code only: message and excerpt are adapter-controlled and
-            # may contain credentials.
-            code = exc.code if isinstance(exc.code, ErrorKind) else ErrorKind.PROVIDER_ERROR
-            logger.warning(
-                "%sprovider %s/%s reported %s (adapter text withheld)",
-                tag,
-                provider_id,
-                model,
-                code.value,
-            )
-            return fail(
-                code,
-                _PUBLIC_MESSAGES[code],
-                provider_metadata=(
-                    {"timeout_origin": "provider"} if code is ErrorKind.PROVIDER_TIMEOUT else None
-                ),
-            )
-        except Exception as exc:
-            # Exception text and tracebacks can carry URLs or tokens: neither the
-            # log nor the game gets them, only the exception type.
-            logger.error(
-                "%sprovider %s/%s raised unexpected %s",
-                tag,
-                provider_id,
-                model,
-                type(exc).__name__,
-            )
-            return fail(ErrorKind.PROVIDER_ERROR, f"Provider raised {type(exc).__name__}.")
-
-        # A provider that swallowed the cancellation, or blocked the event loop,
-        # can come back after the deadline: the answer is stale, not a success.
-        if deadline.expired() or time.perf_counter() - call_started >= timeout_seconds:
-            return deadline_missed()
-
-        # A provider that answered but produced unusable output still spent
-        # tokens and time: keep that telemetry on the failure so benchmarks can
-        # count it. The result is untrusted, so usage is rebuilt in bounds and
-        # metadata must at least be a dict (the envelope re-checks its budget).
-        usage = _canonical_usage(result.usage) if isinstance(result, ProviderResult) else None
-        telemetry: dict[str, UsageStats | dict[str, JsonValue] | None] = {"usage": usage}
-        if isinstance(result, ProviderResult) and isinstance(result.provider_metadata, dict):
-            telemetry["provider_metadata"] = result.provider_metadata
-
-        try:
-            if not isinstance(result, ProviderResult):
-                raise _InvalidOutput(
-                    ErrorKind.SCHEMA_VIOLATION, "Provider returned an invalid result object."
+                try:
+                    async with deadline:
+                        result = await selection.provider.generate(request, model=selection.model)
+                finally:
+                    observation.provider_duration_s = time.perf_counter() - call_started
+            except asyncio.CancelledError:
+                # The provider span ends here too: cancellation never reaches
+                # the fail()/success paths below.
+                if provider_observation is not None:
+                    _observe(
+                        provider_observation.cancel,
+                        call_duration_s=observation.provider_duration_s,
+                    )
+                raise
+            except TimeoutError:
+                if deadline.expired():
+                    return deadline_missed()
+                # The provider raised TimeoutError itself (its own upstream timed out).
+                logger.warning("%sprovider %s/%s raised TimeoutError", tag, provider_id, model)
+                return fail(
+                    ErrorKind.PROVIDER_TIMEOUT,
+                    "Provider reported a timeout from its own upstream.",
+                    provider_metadata={"timeout_origin": "provider"},
                 )
-            room = _coerce_room(result.payload)
-            response = GenerationResponse.success_from_request(
-                request,
-                room=room,
-                provider=provider_id,
-                model=model,
-                started_at=started_at,
-                completed_at=datetime.now(UTC),
-                usage=usage,
-                provider_metadata=result.provider_metadata,
-            )
-        except _InvalidOutput as exc:
-            logger.warning(
-                "%sprovider %s/%s output rejected: %s", tag, provider_id, model, exc.code.value
-            )
-            return fail(
-                exc.code,
-                exc.message,
-                raw_excerpt=exc.raw_excerpt,
-                **telemetry,
-            )
-        except ValidationError as exc:
-            return fail(
-                ErrorKind.SCHEMA_VIOLATION,
-                _summarize(exc),
-                **telemetry,
-            )
-        except ValueError as exc:  # e.g. room depth differs from the request depth
-            return fail(
-                ErrorKind.SCHEMA_VIOLATION,
-                str(exc),
-                **telemetry,
-            )
-        except Exception as exc:
-            logger.error(
-                "%sprovider %s/%s result could not be processed: %s",
-                tag,
-                provider_id,
-                model,
-                type(exc).__name__,
-            )
-            return fail(
-                ErrorKind.INTERNAL_ERROR,
-                "Director failed to process the provider result.",
-                **telemetry,
-            )
+            except ProviderError as exc:
+                # Log the code only: message and excerpt are adapter-controlled and
+                # may contain credentials.
+                code = exc.code if isinstance(exc.code, ErrorKind) else ErrorKind.PROVIDER_ERROR
+                logger.warning(
+                    "%sprovider %s/%s reported %s (adapter text withheld)",
+                    tag,
+                    provider_id,
+                    model,
+                    code.value,
+                )
+                return fail(
+                    code,
+                    _PUBLIC_MESSAGES[code],
+                    provider_metadata=(
+                        {"timeout_origin": "provider"}
+                        if code is ErrorKind.PROVIDER_TIMEOUT
+                        else None
+                    ),
+                )
+            except Exception as exc:
+                # Exception text and tracebacks can carry URLs or tokens: neither the
+                # log nor the game gets them, only the exception type.
+                logger.error(
+                    "%sprovider %s/%s raised unexpected %s",
+                    tag,
+                    provider_id,
+                    model,
+                    type(exc).__name__,
+                )
+                return fail(ErrorKind.PROVIDER_ERROR, f"Provider raised {type(exc).__name__}.")
 
-        response.metadata.latency_ms = _elapsed_ms(started)
-        return GenerationOutcome(response, 200)
+            # A provider that swallowed the cancellation, or blocked the event loop,
+            # can come back after the deadline: the answer is stale, not a success.
+            if deadline.expired() or time.perf_counter() - call_started >= timeout_seconds:
+                return deadline_missed()
+
+            # A provider that answered but produced unusable output still spent
+            # tokens and time: keep that telemetry on the failure so benchmarks can
+            # count it. The result is untrusted, so usage is rebuilt in bounds and
+            # metadata must at least be a dict (the envelope re-checks its budget).
+            usage = _canonical_usage(result.usage) if isinstance(result, ProviderResult) else None
+            telemetry: dict[str, UsageStats | dict[str, JsonValue] | None] = {"usage": usage}
+            if isinstance(result, ProviderResult) and isinstance(result.provider_metadata, dict):
+                telemetry["provider_metadata"] = result.provider_metadata
+
+            try:
+                if not isinstance(result, ProviderResult):
+                    raise _InvalidOutput(
+                        ErrorKind.SCHEMA_VIOLATION, "Provider returned an invalid result object."
+                    )
+                room = _coerce_room(result.payload)
+                response = GenerationResponse.success_from_request(
+                    request,
+                    room=room,
+                    provider=provider_id,
+                    model=model,
+                    started_at=started_at,
+                    completed_at=datetime.now(UTC),
+                    usage=usage,
+                    provider_metadata=result.provider_metadata,
+                )
+            except _InvalidOutput as exc:
+                logger.warning(
+                    "%sprovider %s/%s output rejected: %s", tag, provider_id, model, exc.code.value
+                )
+                return fail(
+                    exc.code,
+                    exc.message,
+                    raw_excerpt=exc.raw_excerpt,
+                    **telemetry,
+                )
+            except ValidationError as exc:
+                return fail(
+                    ErrorKind.SCHEMA_VIOLATION,
+                    _summarize(exc),
+                    **telemetry,
+                )
+            except ValueError as exc:  # e.g. room depth differs from the request depth
+                return fail(
+                    ErrorKind.SCHEMA_VIOLATION,
+                    str(exc),
+                    **telemetry,
+                )
+            except Exception as exc:
+                logger.error(
+                    "%sprovider %s/%s result could not be processed: %s",
+                    tag,
+                    provider_id,
+                    model,
+                    type(exc).__name__,
+                )
+                return fail(
+                    ErrorKind.INTERNAL_ERROR,
+                    "Director failed to process the provider result.",
+                    **telemetry,
+                )
+
+            response.metadata.latency_ms = _elapsed_ms(started)
+            if provider_observation is not None:
+                _observe(
+                    provider_observation.complete,
+                    ProviderOutcome.SUCCESS,
+                    call_duration_s=observation.provider_duration_s,
+                    usage=usage,
+                    provider_metadata=result.provider_metadata,
+                )
+            return GenerationOutcome(response, 200)
+        finally:
+            # Safety net: whatever path was taken above already completed the
+            # span (fail()/the success branch/the cancellation branch), so
+            # this is a no-op; it only matters if some future edit adds a
+            # path that forgets to.
+            if provider_observation is not None:
+                _observe(provider_observation.end)
 
 
 class _InvalidOutput(Exception):
