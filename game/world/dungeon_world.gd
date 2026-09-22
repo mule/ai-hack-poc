@@ -559,6 +559,7 @@ func _commit_room(room: GeneratedRoom, placement: Dictionary, parent_key: String
 		var prov := str(meta.get("provider", "rules-baseline" if source == "fallback" else "director"))
 		var mod := str(meta.get("model", "builtin-v1" if source == "fallback" else "default"))
 
+		var floor_count := maxi(1, owned.values().count(GeneratedRoom.TileType.FLOOR))
 		var committed_attrs := {
 			"room_id": room.room_id,
 			"room_type": room_type,
@@ -566,8 +567,8 @@ func _commit_room(room: GeneratedRoom, placement: Dictionary, parent_key: String
 			"danger": danger,
 			"exit_count": mini(exits.size(), 8),
 			"has_secret": not room.secrets.is_empty() or exits.any(func(e): return e.kind == "secret"),
-			"enemy_density": snappedf(clampf(float(meta.get("enemy_density", float(enemies.size()) / float(maxi(1, room.width * room.height)))), 0.0, 1.0), 0.0001),
-			"loot_density": snappedf(clampf(float(meta.get("loot_density", float(items.size()) / float(maxi(1, room.width * room.height)))), 0.0, 1.0), 0.0001),
+			"enemy_density": snappedf(clampf(float(enemies.size()) / float(floor_count), 0.0, 1.0), 0.0001),
+			"loot_density": snappedf(clampf(float(items.size()) / float(floor_count), 0.0, 1.0), 0.0001),
 			"materialization_ms": materialization_ms,
 			"provider": prov,
 			"model": mod,

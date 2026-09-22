@@ -150,7 +150,7 @@ Code lives in `world/`; `GameState` owns a `DungeonWorld` and `MainGame` drives 
 
 The game runtime includes an asynchronous, bounded telemetry sink (`game/world/game_telemetry_sink.gd`) emitting batch `POST /v1/telemetry/game` events conforming to the canonical OpenTelemetry lifecycle schema.
 
-- **Opt-in**: Set `DUNGEON_TELEMETRY_ENABLED=1`; the sink is disabled by default. It uses `DUNGEON_DIRECTOR_URL` (or `DUNGEON_TELEMETRY_URL`) and keeps collector credentials server-side.
+- **Opt-in**: Set `DUNGEON_TELEMETRY_ENABLED=1`; the sink is disabled by default. It uses the explicit `DUNGEON_TELEMETRY_URL` override, otherwise `DUNGEON_DIRECTOR_URL` and keeps collector credentials server-side.
 - **Non-blocking Execution**: Gameplay never stalls on telemetry queues, serialization, or network latency.
 - **Queue Bounds & Safe Backpressure**: Bounded queue (`max_queue_size=256`). When full, older events are safely dropped with explicit drop counters (`dropped_backpressure`, `dropped_invalid`, `dropped_payload_limit`, `dropped_total`).
 - **Batching**: Automatic flushing at configurable intervals (`flush_interval_sec=0.2`) or batch sizes (`batch_size=20`, up to 100 events per batch, capped at 64 KiB).
@@ -164,7 +164,7 @@ The game runtime includes an asynchronous, bounded telemetry sink (`game/world/g
   - `generation.normalized`: Emitted instead of accepted when the director plan was adjusted to fit geometry; the decision event precedes room.committed.
   - `generation.rejected`: Emitted only when a returned plan is rejected by the game. Transport/provider failures remain fallback reasons.
   - `generation.fallback_applied`: Emitted when fallback placement succeeds; provider/model identify the failed request. Committed/entered room events identify rules-baseline.
-  - `room.committed`: Emitted when a room is permanently placed and committed into the world.
+  - `room.committed`: Emitted when a room is permanently placed and committed into the world. Enemy/loot densities are realized entity counts divided by owned FLOOR tiles (clamped to 0–1), distinct from the semantic density requested by the model.
   - `room.entered`: Emitted when the player enters a new room, tracking `time_to_entry_ms`.
 
 ### Running Game Telemetry Tests

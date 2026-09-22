@@ -40,6 +40,7 @@ func _run() -> void:
 	await _step("test_room_transition_telemetry", _test_room_transition_telemetry)
 	await _step("test_hidden_door_reveal", _test_hidden_door_reveal)
 	await _step("test_large_batches", _test_large_batches)
+	await _step("test_endpoint_override_and_realized_density", _test_endpoint_override_and_realized_density)
 	await _step("test_normalized_outcome_and_failing_provider", _test_normalized_outcome_and_failing_provider)
 	_completed = true
 	_finish()
@@ -618,4 +619,54 @@ func _test_normalized_outcome_and_failing_provider() -> void:
 			_check_eq(committed[0].attributes.provider, "rules-baseline", "Committed fallback attributes materializing baseline")
 			_check(committed[0].attributes.has("materialization_ms"), "Committed room contains client materialization timing")
 		sink.free()
+	_end()
+
+
+func _test_endpoint_override_and_realized_density() -> void:
+	var originals := {}
+	for key in ["DUNGEON_TELEMETRY_URL", "DUNGEON_DIRECTOR_URL", "DUNGEON_TELEMETRY_ENABLED"]:
+		originals[key] = OS.get_environment(key) if OS.has_environment(key) else null
+	OS.set_environment("DUNGEON_TELEMETRY_ENABLED", "1")
+	OS.set_environment("DUNGEON_DIRECTOR_URL", "http://director:8000")
+	OS.set_environment("DUNGEON_TELEMETRY_URL", "http://telemetry:8001")
+	var sink := GameTelemetrySink.new()
+	_check_eq(sink.base_url, "http://telemetry:8001", "Explicit telemetry endpoint overrides director endpoint")
+	OS.set_environment("DUNGEON_TELEMETRY_URL", "offline")
+	var offline := GameTelemetrySink.new()
+	_check(!offline.enabled, "Explicit offline telemetry override disables sink even with director online")
+	OS.unset_environment("DUNGEON_TELEMETRY_URL")
+	_check_eq(GameTelemetrySink._get_default_url(), "http://director:8000", "Unset telemetry URL falls back to director")
+	for key in originals:
+		if originals[key] == null:
+			OS.unset_environment(key)
+		else:
+			OS.set_environment(key, originals[key])
+	offline.free()
+	var events: Array[Dictionary] = []
+	sink.custom_http_post = func(_url, _headers, body, done):
+		var parsed: Dictionary = JSON.parse_string(body)
+		_batches.append(body)
+		for event in parsed.events:
+			events.append(event)
+		done.call(true, parsed.events.size())
+	var state := GameState.new()
+	state.telemetry_sink = sink
+	state.enable_dynamic_world(1)
+	var transport := ScriptedTransport.new()
+	var coord := GenerationCoordinator.new(state, transport)
+	coord.telemetry_sink = sink
+	state.player_pos = Vector2i(4, 2)
+	coord.update()
+	var request: Dictionary = transport.submitted[0].request
+	var plan := StubDirector.simple_plan(request, "density-room", "small", ["east"])
+	var placed: Dictionary = coord._place_plan(state.world.get_frontier("r-000:north"), request.request_id,
+		plan, "director", {"provider": "test", "model": "test", "enemy_density": 1.0, "loot_density": 1.0})
+	_check(placed.ok, "Density measurement fixture commits")
+	sink.poll(1.0)
+	var commits := events.filter(func(e): return e.event_name == "room.committed" and e.attributes.room_id == "density-room")
+	var record: Dictionary = placed.room
+	var floors := maxi(1, record.tiles.values().count(GameState.TileType.FLOOR))
+	_check_eq(commits[0].attributes.enemy_density, snappedf(float(record.enemies.size()) / floors, 0.0001), "Committed enemy density counts realized entities, ignores plan metadata")
+	_check_eq(commits[0].attributes.loot_density, snappedf(float(record.items.size()) / floors, 0.0001), "Committed loot density counts realized entities, ignores plan metadata")
+	sink.free()
 	_end()

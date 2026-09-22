@@ -145,12 +145,12 @@ func _init(url: String = "") -> void:
 
 
 static func _get_default_url() -> String:
-	var env_url := OS.get_environment("DUNGEON_DIRECTOR_URL").strip_edges()
-	if env_url != "":
-		return env_url
 	var tel_url := OS.get_environment("DUNGEON_TELEMETRY_URL").strip_edges()
 	if tel_url != "":
 		return tel_url
+	var env_url := OS.get_environment("DUNGEON_DIRECTOR_URL").strip_edges()
+	if env_url != "":
+		return env_url
 	return "http://127.0.0.1:8000"
 
 
