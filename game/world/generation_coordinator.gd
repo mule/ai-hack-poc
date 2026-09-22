@@ -301,7 +301,10 @@ func _on_result(result: Dictionary, request_id: String, world: RefCounted) -> vo
 ## the world, which refuses them because the frontier is no longer pending.
 func _resolve(f: Dictionary, request_id: String, result: Dictionary, late: bool, request: Dictionary = {}, elapsed_ms: float = -1.0) -> void:
 	var interpreted := _interpret(result, request_id)
-	var resp_meta: Dictionary = interpreted.get("metadata", {})
+	var resp_meta: Dictionary = interpreted.get("metadata", {}).duplicate(true)
+	var traceparent: Variant = result.get("traceparent", null)
+	if traceparent != null and GameTelemetrySink._is_valid_traceparent(str(traceparent)):
+		resp_meta["_telemetry_traceparent"] = traceparent
 
 	# Emit generation.response_received if transport returned a response
 	if result.get("transport_ok", false) and telemetry_sink != null and telemetry_sink.has_method("enqueue_event"):
@@ -319,7 +322,7 @@ func _resolve(f: Dictionary, request_id: String, result: Dictionary, late: bool,
 			"model": mod_recv,
 			"network_ms": net_ms,
 		}
-		telemetry_sink.enqueue_event("generation.response_received", game_state.world.run_id, request_id, resp_attrs)
+		telemetry_sink.enqueue_event("generation.response_received", game_state.world.run_id, request_id, resp_attrs, resp_meta.get("_telemetry_traceparent"))
 
 	if not interpreted.ok:
 		if late:
@@ -416,6 +419,7 @@ func _place_plan(f: Dictionary, request_id: String, plan: Dictionary, source: St
 			attempt_meta["size_used"] = size
 			if size != base.get("size", size):
 				attempt_meta["repositioned"] = true
+				attempt_meta["room_size_reduced"] = true
 			if not pruned.is_empty():
 				attempt_meta["pruned_exits"] = pruned.duplicate()
 			var room := RoomGenerator.generate(candidate, room_seed)
@@ -499,12 +503,13 @@ func _fallback(
 	if reject_reason != "" and telemetry_sink != null:
 		telemetry_sink.enqueue_event("generation.rejected", world.run_id, request_id, {
 			"reject_reason": reject_reason, "provider": failed_provider, "model": failed_model,
-		})
+		}, response_metadata.get("_telemetry_traceparent"))
 	last_provider = "rules-baseline"
 	last_model = "builtin-v1"
 	last_latency_ms = elapsed_ms if elapsed_ms >= 0.0 else -1.0
 	last_provider_metadata = {"fallback_reason": reason}
 	var fallback_metadata := {
+		"_telemetry_traceparent": response_metadata.get("_telemetry_traceparent"),
 		"fallback_reason": reason,
 		"telemetry_fallback_reason": fallback_reason,
 		"failed_provider": failed_provider,

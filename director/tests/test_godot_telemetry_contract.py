@@ -88,3 +88,34 @@ def test_actual_godot_batches_match_python_contract(tmp_path):
         "door.revealed",
         "room.entered",
     }
+
+    from opentelemetry.sdk.trace import TracerProvider
+    from opentelemetry.sdk.trace.export import SimpleSpanProcessor
+    from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
+
+    from dungeon_director.game_telemetry import GameTelemetryRecorder
+    from dungeon_director.telemetry import DirectorTelemetry
+
+    exporter = InMemorySpanExporter()
+    tracer = TracerProvider()
+    tracer.add_span_processor(SimpleSpanProcessor(exporter))
+    telemetry = DirectorTelemetry(tracer_provider=tracer)
+    recorder = GameTelemetryRecorder(telemetry, {})
+    linked = [event for event in events if event.traceparent ==
+              "00-1234567890abcdef1234567890abcdef-1234567890abcdef-01"]
+    assert {event.event_name.value for event in linked} >= {
+        "generation.response_received", "generation.accepted", "generation.normalized",
+        "generation.rejected", "generation.fallback_applied", "room.committed",
+        "door.revealed", "room.entered",
+    }
+    assert any(event.attributes.get("normalize_reason") == "duplicate_room_id_rewritten"
+               for event in linked)
+    for event in linked:
+        recorder.record(event.model_dump(mode="json", exclude_none=True))
+    spans = exporter.get_finished_spans()
+    assert len(spans) == len(linked)
+    for span in spans:
+        assert len(span.links) == 1
+        assert span.links[0].context.trace_id == int("1234567890abcdef1234567890abcdef", 16)
+        assert span.links[0].context.span_id == int("1234567890abcdef", 16)
+    telemetry.shutdown()

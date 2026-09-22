@@ -582,22 +582,26 @@ func _commit_room(room: GeneratedRoom, placement: Dictionary, parent_key: String
 			var decision := {"provider": prov, "model": mod, "room_type": room_type,
 				"room_size": room_size, "danger": danger}
 			var normalized := ""
-			if not meta.get("pruned_exits", []).is_empty():
+			if meta.get("room_id_rewritten", false):
+				normalized = "duplicate_room_id_rewritten"
+			elif not meta.get("pruned_exits", []).is_empty():
 				normalized = "exit_pruned"
+			elif meta.get("room_size_reduced", false):
+				normalized = "room_size_reduced"
 			elif meta.get("repositioned", false):
 				normalized = "exit_conflict"
 			if normalized != "":
 				decision["normalize_reason"] = normalized
-				telemetry_sink.enqueue_event("generation.normalized", run_id, room_req_id, decision)
+				telemetry_sink.enqueue_event("generation.normalized", run_id, room_req_id, decision, meta.get("_telemetry_traceparent"))
 			else:
-				telemetry_sink.enqueue_event("generation.accepted", run_id, room_req_id, decision)
+				telemetry_sink.enqueue_event("generation.accepted", run_id, room_req_id, decision, meta.get("_telemetry_traceparent"))
 		elif source == "fallback":
 			telemetry_sink.enqueue_event("generation.fallback_applied", run_id, room_req_id, {
 				"provider": meta.get("failed_provider", "unknown"),
 				"model": meta.get("failed_model", "unknown"),
 				"fallback_reason": meta.get("telemetry_fallback_reason", "rejected_by_game"),
-			})
-		telemetry_sink.enqueue_event("room.committed", run_id, room_req_id, committed_attrs)
+			}, meta.get("_telemetry_traceparent"))
+		telemetry_sink.enqueue_event("room.committed", run_id, room_req_id, committed_attrs, meta.get("_telemetry_traceparent"))
 
 		# 3. frontier.discovered for newly created unresolved exits (null request_id)
 		for exit_entry in exits:

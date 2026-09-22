@@ -445,11 +445,15 @@ func _record_door_revealed(pos: Vector2i) -> void:
 	for frontier in world.frontiers.values():
 		if frontier.pos == pos and str(frontier.get("request_id", "")) != "":
 			request_id = frontier.request_id
+			var resolved_id: String = str(frontier.get("resolved_room_id", ""))
+			if world.rooms.has(resolved_id):
+				room_id = resolved_id
+				record = world.rooms[resolved_id]
 			break
 	var elapsed := float(maxi(0, Time.get_ticks_msec() - int(record.get("committed_at_msec", Time.get_ticks_msec()))))
 	telemetry_sink.enqueue_event("door.revealed", world.run_id, request_id, {
 		"room_id": room_id, "time_to_visible_ms": elapsed,
-	})
+	}, record.get("meta", {}).get("_telemetry_traceparent"))
 
 
 func _check_room_transition() -> void:
@@ -484,4 +488,4 @@ func _check_room_transition() -> void:
 				req_id = world.frontiers[pf].get("request_id", null)
 		if req_id == null or str(req_id) == "":
 			req_id = "req-%s-init" % world.run_id
-		telemetry_sink.enqueue_event("room.entered", world.run_id, req_id, attrs)
+		telemetry_sink.enqueue_event("room.entered", world.run_id, req_id, attrs, r_meta.get("_telemetry_traceparent"))

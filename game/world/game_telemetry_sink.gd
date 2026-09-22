@@ -92,6 +92,8 @@ const ALLOWED_NORMALIZE_REASONS: PackedStringArray = [
 	"exit_direction_reassigned",
 	"secret_probability_clamped",
 	"exit_pruned",
+	"duplicate_room_id_rewritten",
+	"room_size_reduced",
 ]
 
 const ALLOWED_REJECT_REASONS: PackedStringArray = [

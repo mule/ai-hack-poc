@@ -6,6 +6,8 @@ const GameTelemetrySink = preload("res://world/game_telemetry_sink.gd")
 const GameState = preload("res://src/game_state.gd")
 const DungeonWorld = preload("res://world/dungeon_world.gd")
 const GenerationCoordinator = preload("res://world/generation_coordinator.gd")
+const GenerationClient = preload("res://world/generation_client.gd")
+const LINK_CONTEXT := "00-1234567890abcdef1234567890abcdef-1234567890abcdef-01"
 const ScriptedTransport = preload("res://tests/support/scripted_transport.gd")
 const StubDirector = preload("res://tests/support/stub_director.gd")
 const RoomGenerator = preload("res://generation/room_generator.gd")
@@ -361,7 +363,14 @@ func _test_full_generation_lifecycle_telemetry() -> void:
 			"latency_ms": 120.0,
 		},
 	}
-	transport.deliver(0, {"transport_ok": true, "http_status": 200, "body": JSON.stringify(resp)})
+	var client := GenerationClient.new()
+	var http := HTTPRequest.new()
+	client.add_child(http)
+	client._pending[http] = {"on_done": func(result): transport.deliver(0, result)}
+	client._on_completed(HTTPRequest.RESULT_SUCCESS, 200, PackedStringArray(["TrAcEpArEnT: " + LINK_CONTEXT]), JSON.stringify(resp).to_utf8_buffer(), http)
+	_check_eq(client._response_traceparent(PackedStringArray(["traceparent: invalid-secret"])), null, "Malformed response context ignored")
+	_check_eq(client._response_traceparent(PackedStringArray(["traceparent: " + LINK_CONTEXT, "TRACEPARENT: " + LINK_CONTEXT])), null, "Duplicate context ignored")
+	client.free()
 	sink.poll(1.0)
 
 	var lifecycle_names: Array[String] = []
@@ -376,6 +385,22 @@ func _test_full_generation_lifecycle_telemetry() -> void:
 	_check(!lifecycle_names.has("door.revealed"), "Placement never reports an unopened door as revealed")
 	_check(lifecycle_names.find("generation.accepted") < lifecycle_names.find("room.committed"), "Acceptance precedes room commit")
 	_check(lifecycle_names.has("frontier.discovered"), "Emitted frontier.discovered for east exit of r-001")
+	for event in events_captured:
+		if event.event_name in ["generation.response_received", "generation.accepted", "room.committed"]:
+			_check_eq(event.get("traceparent"), LINK_CONTEXT, "Response context propagates to " + event.event_name)
+	var generated: Dictionary = state.world.rooms["r-001"]
+	state._record_door_revealed(state.world.frontiers[generated.parent_frontier].pos)
+	for pos in generated.tiles:
+		if generated.tiles[pos] == GameState.TileType.FLOOR:
+			state.player_pos = pos
+			break
+	state._check_room_transition()
+	sink.poll(1.0)
+	for name in ["door.revealed", "room.entered"]:
+		var linked := events_captured.filter(func(e): return e.event_name == name)
+		_check_eq(linked.size(), 1, "Generated room emits " + name)
+		_check_eq(linked[0].get("traceparent"), LINK_CONTEXT, "Stored room context links " + name)
+
 
 	_end()
 
@@ -556,7 +581,7 @@ func _test_large_batches() -> void:
 
 
 func _test_normalized_outcome_and_failing_provider() -> void:
-	for scenario in ["normalized", "provider_failure", "invalid_plan"]:
+	for scenario in ["normalized", "duplicate_id", "size_reduced", "provider_failure", "invalid_plan"]:
 		var sink := GameTelemetrySink.new()
 		sink.enabled = true
 		var events: Array[Dictionary] = []
@@ -582,6 +607,13 @@ func _test_normalized_outcome_and_failing_provider() -> void:
 			state.world.tiles[Vector2i(-1, -4)] = GameState.TileType.WALL
 			var plan := StubDirector.simple_plan(request, "r-001", "small", ["west", "east"])
 			result = StubDirector.success_result(request, plan)
+		elif scenario == "size_reduced":
+			state.world.tiles[Vector2i(4, -10)] = GameState.TileType.FLOOR
+			var plan := StubDirector.simple_plan(request, "r-001", "large", ["east"])
+			result = StubDirector.success_result(request, plan)
+		elif scenario == "duplicate_id":
+			var plan := StubDirector.simple_plan(request, "r-000", "small", ["east"])
+			result = StubDirector.success_result(request, plan)
 		elif scenario == "invalid_plan":
 			var plan := StubDirector.simple_plan(request, "r-001", "small", ["east"])
 			plan.depth = 2
@@ -594,16 +626,19 @@ func _test_normalized_outcome_and_failing_provider() -> void:
 		response.metadata.provider = "actual-provider"
 		response.metadata.model = "actual-model"
 		result.body = JSON.stringify(response)
+		result["traceparent"] = LINK_CONTEXT
 		transport.deliver(0, result)
 		sink.poll(1.0)
 		var outcomes: Array[String] = []
 		for event in events:
 			outcomes.append(event.event_name)
-		if scenario == "normalized":
+		if scenario in ["normalized", "duplicate_id", "size_reduced"]:
 			_check(outcomes.has("generation.normalized"), "Pruned exit emits normalized decision")
 			_check(!outcomes.has("generation.accepted"), "Normalized decision is exclusive of accepted")
 			# Ignore the initial room's commit when comparing the generated lifecycle.
 			var generated := events.filter(func(e): return e.request_id == request.request_id)
+			var normalized_events := generated.filter(func(e): return e.event_name == "generation.normalized")
+			_check_eq(normalized_events[0].attributes.normalize_reason, {"duplicate_id": "duplicate_room_id_rewritten", "size_reduced": "room_size_reduced", "normalized": "exit_pruned"}[scenario], "Normalization reason records actual correction")
 			var stages: Array[String] = []
 			for event in generated:
 				stages.append(event.event_name)
@@ -666,7 +701,7 @@ func _test_endpoint_override_and_realized_density() -> void:
 	var commits := events.filter(func(e): return e.event_name == "room.committed" and e.attributes.room_id == "density-room")
 	var record: Dictionary = placed.room
 	var floors := maxi(1, record.tiles.values().count(GameState.TileType.FLOOR))
-	_check_eq(commits[0].attributes.enemy_density, snappedf(float(record.enemies.size()) / floors, 0.0001), "Committed enemy density counts realized entities, ignores plan metadata")
-	_check_eq(commits[0].attributes.loot_density, snappedf(float(record.items.size()) / floors, 0.0001), "Committed loot density counts realized entities, ignores plan metadata")
+	_check(is_equal_approx(commits[0].attributes.enemy_density, snappedf(float(record.enemies.size()) / floors, 0.0001)), "Committed enemy density counts realized entities, ignores plan metadata")
+	_check(is_equal_approx(commits[0].attributes.loot_density, snappedf(float(record.items.size()) / floors, 0.0001)), "Committed loot density counts realized entities, ignores plan metadata")
 	sink.free()
 	_end()

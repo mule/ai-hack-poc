@@ -338,7 +338,9 @@ class TestRoomEnteredProviderModel:
 
 
 class TestNewReasonCodes:
-    @pytest.mark.parametrize("reason", ["exit_pruned"])
+    @pytest.mark.parametrize(
+        "reason", ["exit_pruned", "duplicate_room_id_rewritten", "room_size_reduced"]
+    )
     def test_normalize_reason_accepts_new_values(self, reason: str) -> None:
         event = GameEvent.model_validate(
             _event(
