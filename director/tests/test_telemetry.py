@@ -34,6 +34,7 @@ from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanE
 from dungeon_director.app import create_app
 from dungeon_director.contracts import ErrorKind, RoomPlan, UsageStats
 from dungeon_director.errors import ProviderError
+from dungeon_director.provider_telemetry import PROVIDER_SPAN_NAME
 from dungeon_director.providers import ProviderResult
 from dungeon_director.registry import ProviderRegistry
 from dungeon_director.service import DirectorService, GenerationOutcome
@@ -42,6 +43,7 @@ from dungeon_director.telemetry import (
     DEFAULT_OTLP_ENDPOINT,
     LATENCY_BUCKET_BOUNDARIES,
     METRIC_DIMENSIONS,
+    SPAN_NAME,
     DirectorTelemetry,
     TelemetrySettings,
     setup_telemetry,
@@ -70,6 +72,23 @@ class Harness:
     def only_span(self) -> ReadableSpan:
         spans = self.finished_spans()
         assert len(spans) == 1, f"expected exactly one span, got {[s.name for s in spans]}"
+        return spans[0]
+
+    def director_spans(self) -> list[ReadableSpan]:
+        return [s for s in self.finished_spans() if s.name == SPAN_NAME]
+
+    def director_span(self) -> ReadableSpan:
+        """The one ``director.generate`` span, ignoring any (#24) provider spans."""
+        spans = self.director_spans()
+        assert len(spans) == 1, f"expected exactly one director span, got {[s.name for s in spans]}"
+        return spans[0]
+
+    def provider_spans(self) -> list[ReadableSpan]:
+        return [s for s in self.finished_spans() if s.name == PROVIDER_SPAN_NAME]
+
+    def only_provider_span(self) -> ReadableSpan:
+        spans = self.provider_spans()
+        assert len(spans) == 1, f"expected exactly one provider span, got {[s.name for s in spans]}"
         return spans[0]
 
     def metrics(self) -> dict[str, list[Any]]:
@@ -165,7 +184,7 @@ def test_success_emits_one_stable_span_with_shadow_ready_attributes(harness):
     outcome = asyncio.run(service.generate(request))
 
     assert outcome.status_code == 200
-    span = harness.only_span()
+    span = harness.director_span()
     # One stable, low-cardinality name; provider/model are attributes, not name parts.
     assert span.name == "director.generate"
     assert span.status.is_ok
@@ -191,6 +210,25 @@ def test_success_emits_one_stable_span_with_shadow_ready_attributes(harness):
     assert attrs["gen_ai.usage.output_tokens"] == 18
     assert attrs["gen_ai.usage.total_tokens"] == 60
     assert attrs["gen_ai.usage.cost"] == 0.0015
+
+    # (#24) exactly one provider-call child span, properly parented.
+    provider_span = harness.only_provider_span()
+    assert provider_span.parent is not None
+    assert provider_span.parent.span_id == span.context.span_id
+    assert provider_span.context.trace_id == span.context.trace_id
+    pattrs = provider_span.attributes
+    assert pattrs["gen_ai.system"] == "test-provider"
+    assert pattrs["gen_ai.request.model"] == "fake-model"
+    assert pattrs["gen_ai.response.model"] == "fake-model"
+    assert pattrs["director.provider.outcome"] == "success"
+    assert pattrs["director.provider.execution_mode"] == "active"
+    assert pattrs["director.provider.schema_valid"] is True
+    assert pattrs["director.provider.call_duration_ms"] > 0
+    assert pattrs["gen_ai.usage.input_tokens"] == 42
+    assert pattrs["gen_ai.usage.output_tokens"] == 18
+    assert pattrs["gen_ai.usage.total_tokens"] == 60
+    assert pattrs["gen_ai.usage.cost"] == 0.0015
+    assert provider_span.status.is_ok
 
 
 def test_success_metrics_use_only_bounded_dimensions(harness):
@@ -243,7 +281,7 @@ def test_shadow_execution_is_distinguishable_on_span_and_metrics(harness):
 
     modes = {
         (s.attributes["director.execution_mode"], s.attributes["director.is_shadow"])
-        for s in harness.finished_spans()
+        for s in harness.director_spans()
     }
     assert modes == {("active", False), ("shadow", True)}
     by_mode = {p.attributes["execution_mode"]: p.value for p in harness.request_points()}
@@ -271,7 +309,7 @@ def test_configured_shadow_fanout_uses_the_instrumented_execution_path(harness):
 
     assert outcome.response.metadata.provider == "active"
     spans_by_mode = {
-        span.attributes["director.execution_mode"]: span for span in harness.finished_spans()
+        span.attributes["director.execution_mode"]: span for span in harness.director_spans()
     }
     assert set(spans_by_mode) == {"active", "shadow"}
     assert spans_by_mode["active"].attributes["director.provider"] == "active"
@@ -371,7 +409,7 @@ def test_failures_record_specific_status_and_code(harness, provider, kwargs, htt
     outcome = run_generate(service, **kwargs)
 
     assert outcome.status_code == http
-    span = harness.only_span()
+    span = harness.director_span()
     assert not span.status.is_ok and span.status.status_code.name == "ERROR"
     assert span.status.description == code
     assert span.attributes["director.status"] == status
@@ -390,6 +428,13 @@ def test_failures_record_specific_status_and_code(harness, provider, kwargs, htt
     assert "director.generation.tokens" not in harness.metrics()
     assert "director.generation.cost" not in harness.metrics()
 
+    # (#24) the provider-call span records the same failure, separately.
+    pspan = harness.only_provider_span()
+    assert not pspan.status.is_ok and pspan.status.status_code.name == "ERROR"
+    assert pspan.status.description == code
+    assert pspan.attributes["director.provider.error_code"] == code
+    assert pspan.parent is not None and pspan.parent.span_id == span.context.span_id
+
 
 def test_schema_failures_mark_schema_invalid_others_leave_it_unset(harness):
     asyncio.run(
@@ -401,9 +446,17 @@ def test_schema_failures_mark_schema_invalid_others_leave_it_unset(harness):
         )
     )
 
-    by_provider = {s.attributes["director.provider"]: s for s in harness.finished_spans()}
+    by_provider = {s.attributes["director.provider"]: s for s in harness.director_spans()}
     assert by_provider["m"].attributes["director.schema_valid"] is False
     assert "director.schema_valid" not in by_provider["r"].attributes
+
+    # (#24) the provider span distinguishes response-normalization failures
+    # (schema) from provider-raised failures the same way.
+    by_pprovider = {s.attributes["gen_ai.system"]: s for s in harness.provider_spans()}
+    assert by_pprovider["m"].attributes["director.provider.schema_valid"] is False
+    assert by_pprovider["m"].attributes["director.provider.outcome"] == "schema_error"
+    assert "director.provider.schema_valid" not in by_pprovider["r"].attributes
+    assert by_pprovider["r"].attributes["director.provider.outcome"] == "provider_error"
 
 
 def test_director_deadline_timeout_records_origin_and_provider_latency(harness):
@@ -413,7 +466,7 @@ def test_director_deadline_timeout_records_origin_and_provider_latency(harness):
     outcome = run_generate(service)
 
     assert outcome.status_code == 504
-    span = harness.only_span()
+    span = harness.director_span()
     assert span.attributes["director.status"] == "timeout"
     assert span.attributes["director.error_code"] == "provider_timeout"
     assert span.attributes["director.timeout_origin"] == "director_deadline"
@@ -421,11 +474,17 @@ def test_director_deadline_timeout_records_origin_and_provider_latency(harness):
     assert harness.only_request_point().attributes["status"] == "timeout"
     assert slow.cancelled
 
+    pspan = harness.only_provider_span()
+    assert pspan.attributes["director.provider.outcome"] == "timeout"
+    assert pspan.attributes["director.provider.timeout_origin"] == "director_deadline"
+    assert pspan.attributes["director.provider.call_duration_ms"] >= 40
+
 
 def test_provider_timeouterror_is_attributed_to_the_provider(harness):
     service = make_service(RaisingProvider(TimeoutError(), "p"), harness.telemetry)
     run_generate(service)
-    assert harness.only_span().attributes["director.timeout_origin"] == "provider"
+    assert harness.director_span().attributes["director.timeout_origin"] == "provider"
+    assert harness.only_provider_span().attributes["director.provider.timeout_origin"] == "provider"
 
 
 # --------------------------------------------------------------------------- selection
@@ -504,11 +563,14 @@ def test_tokens_and_cost_are_omitted_when_not_reported(harness):
 
     assert run_generate(service).status_code == 200
 
-    span = harness.only_span()
+    span = harness.director_span()
     assert not [k for k in span.attributes if k.startswith("gen_ai.usage")]
     metrics = harness.metrics()
     assert "director.generation.tokens" not in metrics
     assert "director.generation.cost" not in metrics
+    assert not [
+        k for k in harness.only_provider_span().attributes if k.startswith("gen_ai.usage")
+    ]
 
 
 def test_partial_usage_records_only_what_was_reported(harness):
@@ -517,11 +579,14 @@ def test_partial_usage_records_only_what_was_reported(harness):
 
     run_generate(service)
 
-    span = harness.only_span()
+    span = harness.director_span()
     assert span.attributes["gen_ai.usage.input_tokens"] == 7
     assert "gen_ai.usage.output_tokens" not in span.attributes
     assert "gen_ai.usage.total_tokens" not in span.attributes
     assert "gen_ai.usage.cost" not in span.attributes
+    pattrs = harness.only_provider_span().attributes
+    assert pattrs["gen_ai.usage.input_tokens"] == 7
+    assert "gen_ai.usage.output_tokens" not in pattrs
     tokens = harness.metrics()["director.generation.tokens"]
     assert [(p.attributes["token_type"], p.value) for p in tokens] == [("input", 7)]
     assert "director.generation.cost" not in harness.metrics()
@@ -543,7 +608,7 @@ def test_cancellation_is_recorded_and_still_propagates(harness):
 
     asyncio.run(scenario())
 
-    span = harness.only_span()
+    span = harness.director_span()
     assert span.end_time is not None
     assert span.attributes["director.status"] == "cancelled"
     assert span.attributes["director.provider"] == "slow"
@@ -554,6 +619,13 @@ def test_cancellation_is_recorded_and_still_propagates(harness):
     assert point.attributes["error_code"] == "none"
     assert len(harness.metrics()["director.generation.duration"]) == 1
     assert slow.cancelled
+
+    # (#24) the provider span is cancelled too, not silently dropped.
+    pspan = harness.only_provider_span()
+    assert pspan.end_time is not None
+    assert pspan.attributes["director.provider.outcome"] == "cancelled"
+    assert pspan.status.status_code.name != "ERROR"
+    assert pspan.parent is not None and pspan.parent.span_id == span.context.span_id
 
 
 def test_unexpected_service_exception_still_ends_the_span_and_propagates(harness, monkeypatch):
@@ -569,9 +641,16 @@ def test_unexpected_service_exception_still_ends_the_span_and_propagates(harness
     with pytest.raises(ZeroDivisionError):
         run_generate(service)
 
-    span = harness.only_span()
+    span = harness.director_span()
     assert span.attributes["director.status"] == "internal_error"
     assert harness.only_request_point().attributes["status"] == "internal_error"
+
+    # (#24) GenerationResponse.failure() itself exploding means fail() never
+    # reaches provider_observation.complete() either — the provider span still
+    # closes (the try/finally safety net), just without an outcome attribute.
+    pspan = harness.only_provider_span()
+    assert pspan.end_time is not None
+    assert "director.provider.outcome" not in pspan.attributes
 
 
 # --------------------------------------------------------------------------- FastAPI 422
@@ -585,10 +664,14 @@ def _client(harness: Harness, provider: FakeProvider | None = None) -> TestClien
     return TestClient(create_app(settings, registry, harness.telemetry))
 
 
-def test_valid_http_request_emits_exactly_one_span(harness):
+def test_valid_http_request_emits_one_director_span_and_one_provider_span(harness):
     response = _client(harness).post("/v1/generate", json=request_payload())
     assert response.status_code == 200
-    assert harness.only_span().attributes["director.http_status"] == 200
+    assert harness.director_span().attributes["director.http_status"] == 200
+    assert len(harness.finished_spans()) == 2
+    provider_span = harness.only_provider_span()
+    assert provider_span.parent is not None
+    assert provider_span.parent.span_id == harness.director_span().context.span_id
 
 
 @pytest.mark.parametrize(
@@ -706,7 +789,10 @@ def test_no_secret_or_input_text_reaches_spans_metrics_or_logs(harness, caplog):
     for provider in provider_cases:
         asyncio.run(make_service(provider, harness.telemetry).generate(request))
 
-    assert len(harness.finished_spans()) == len(provider_cases)
+    # (#24) each provider call now emits a director span *and* a provider span.
+    assert len(harness.finished_spans()) == 2 * len(provider_cases)
+    assert len(harness.director_spans()) == len(provider_cases)
+    assert len(harness.provider_spans()) == len(provider_cases)
     for span in harness.finished_spans():
         assert SECRET not in "".join(every_string(span))
         assert "prompt" not in "".join(k for k in span.attributes)
@@ -925,7 +1011,7 @@ def test_each_instrument_fails_independently(harness, broken):
 
     run_generate(make_service(UsageProvider(usage), harness.telemetry))
 
-    assert harness.only_span().attributes["director.status"] == "success"
+    assert harness.director_span().attributes["director.status"] == "success"
     expected = {
         "_requests": "director.generation.requests",
         "_e2e_duration": "director.generation.duration",
@@ -945,7 +1031,7 @@ def test_a_failing_metric_does_not_lose_the_span():
 
     run_generate(make_service(FakeProvider("p"), telemetry))
 
-    (span,) = exporter.get_finished_spans()
+    (span,) = [s for s in exporter.get_finished_spans() if s.name == SPAN_NAME]
     assert span.attributes["director.status"] == "success"
 
 
@@ -962,7 +1048,7 @@ def test_shutdown_flushes_pending_spans_and_metrics(harness):
     run_generate(make_service(FakeProvider("p"), harness.telemetry))
     harness.telemetry.flush()
     harness.telemetry.shutdown()
-    assert len(harness.finished_spans()) == 1
+    assert len(harness.finished_spans()) == 2
 
 
 def test_app_lifespan_shuts_telemetry_down_even_if_it_and_the_registry_fail(caplog):
@@ -1084,4 +1170,5 @@ def test_settings_from_env(env, enabled, endpoint, service):
 def test_provider_error_uses_only_the_code_in_span_status(harness):
     provider = RaisingProvider(ProviderError(ErrorKind.RATE_LIMITED, f"quota {SECRET}"), "p")
     run_generate(make_service(provider, harness.telemetry))
-    assert harness.only_span().status.description == "rate_limited"
+    assert harness.director_span().status.description == "rate_limited"
+    assert harness.only_provider_span().status.description == "rate_limited"

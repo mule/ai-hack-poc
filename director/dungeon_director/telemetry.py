@@ -1267,6 +1267,24 @@ class GenerationObservation:
             self._done = True
             self._telemetry._end_span(self._span)
 
+    @property
+    def context(self) -> Any:
+        """The :mod:`opentelemetry.context` ``Context`` carrying this span.
+
+        For a child span (the #24 provider-call span) to parent onto this
+        observation explicitly — never through ambient/"current span"
+        propagation, which concurrent shadow tasks could leak into each
+        other. Never raises; a telemetry failure here just means the child
+        span falls back to no explicit parent.
+        """
+        try:
+            from opentelemetry import trace  # noqa: PLC0415
+
+            return trace.set_span_in_context(self._span)
+        except Exception as exc:
+            logger.warning("telemetry context lookup failed (%s)", type(exc).__name__)
+            return None
+
     # ----------------------------------------------------------------------
 
     @_never_raises
