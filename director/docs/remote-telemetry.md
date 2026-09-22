@@ -80,11 +80,11 @@ entries counted and dropped). Core identity above wins over same-named keys.
 
 ### Export timing
 
-- `OTEL_EXPORTER_OTLP_TIMEOUT` (ms, default 10000; out-of-range values use
-  the default, so the effective value is always 500–30000): per-request
+- `OTEL_EXPORTER_OTLP_TIMEOUT` (seconds, default 10; out-of-range values use
+  the default, so the effective value is always 0.5–30): per-request
   exporter timeout. Signal-specific
   `OTEL_EXPORTER_OTLP_{TRACES,METRICS,LOGS}_TIMEOUT` override it.
-- `OTEL_EXPORTER_OTLP_METRIC_EXPORT_INTERVAL` (ms, default 5000; effectively
+- `OTEL_METRIC_EXPORT_INTERVAL` (ms, default 5000; effectively
   1000–60000): metric push interval.
 
 The bounds keep flush and shutdown bounded: with an unreachable collector,

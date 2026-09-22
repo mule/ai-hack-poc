@@ -52,6 +52,7 @@ from __future__ import annotations
 
 import functools
 import logging
+import math
 import os
 import re
 import time
@@ -59,7 +60,7 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from enum import StrEnum
 from typing import Any, ParamSpec, TypeVar
-from urllib.parse import urlsplit
+from urllib.parse import unquote, urlsplit
 
 from opentelemetry._logs import NoOpLoggerProvider, SeverityNumber
 from opentelemetry.metrics import MeterProvider, NoOpMeterProvider
@@ -180,7 +181,7 @@ DEFAULT_METRIC_EXPORT_INTERVAL_MILLIS = 5000
 MIN_METRIC_EXPORT_INTERVAL_MILLIS = 1000
 MAX_METRIC_EXPORT_INTERVAL_MILLIS = 60000
 
-#: Per-request OTLP exporter timeout (``OTEL_EXPORTER_OTLP_TIMEOUT``, ms).
+#: Per-request OTLP exporter timeout (``OTEL_EXPORTER_OTLP_TIMEOUT``, seconds).
 #: Clamped so flush/shutdown stay bounded even with an unreachable collector.
 DEFAULT_EXPORT_TIMEOUT_MILLIS = 10_000
 MIN_EXPORT_TIMEOUT_MILLIS = 500
@@ -221,10 +222,6 @@ _SEVERITIES = {
     "WARNING": SeverityNumber.WARN,
     "ERROR": SeverityNumber.ERROR,
 }
-
-# Anything that looks like a URL in SDK diagnostics is reduced to its origin:
-# endpoints may embed credentials in the userinfo part.
-_URL_RE = re.compile(r"https?://[^\s'\"<>]+")
 
 _P = ParamSpec("_P")
 _R = TypeVar("_R")
@@ -337,6 +334,43 @@ def _parse_kv_pairs(
     return tuple(pairs), rejected
 
 
+def _parse_headers(raw: str | None) -> tuple[tuple[tuple[str, str], ...], int]:
+    """Decode OTel percent-encoded header values before validating HTTP syntax."""
+    pairs, rejected = _parse_kv_pairs(raw, max_value_chars=3072)
+    result: dict[str, str] = {}
+    for key, encoded in pairs:
+        try:
+            value = unquote(encoded, errors="strict")
+        except UnicodeError:
+            rejected += 1
+            continue
+        if (
+            not re.fullmatch(r"[!#$%&'*+.^_`|~0-9A-Za-z-]+", key)
+            or not 0 < len(value) <= 1024
+            or value[0].isspace()
+            or any(ord(char) < 32 or ord(char) > 126 for char in value)
+        ):
+            rejected += 1
+            continue
+        result[key.lower()] = value
+    return tuple(result.items()), rejected
+
+
+def _lenient_seconds(env: Mapping[str, str], name: str, default: float) -> float:
+    """OTLP timeout variables use seconds, including fractional seconds."""
+    raw = _read(env, name)
+    if raw is None:
+        return default
+    try:
+        value = float(raw)
+    except ValueError:
+        value = math.nan
+    if not math.isfinite(value) or not 0.5 <= value <= 30.0:
+        logger.warning("%s must be 0.5-30 seconds; using the default", name)
+        return default
+    return value
+
+
 def _lenient_millis(env: Mapping[str, str], name: str, default: int, low: int, high: int) -> int:
     """Milliseconds from the environment; out-of-range values use ``default``.
 
@@ -363,10 +397,13 @@ def _lenient_millis(env: Mapping[str, str], name: str, default: int, low: int, h
 
 
 def _validated_endpoint(url: str) -> str | None:
-    """An http(s) URL with a host, or ``None``. Userinfo is not rejected here:
-    exporter construction and the guarded fallback own that failure mode."""
-    parts = urlsplit(url)
-    if parts.scheme not in ("http", "https") or not parts.hostname:
+    """Validate URL syntax without letting malformed hosts/ports escape setup."""
+    try:
+        parts = urlsplit(url)
+        if parts.scheme not in ("http", "https") or not parts.hostname:
+            return None
+        _ = parts.port
+    except ValueError:
         return None
     return url
 
@@ -558,30 +595,25 @@ class _TrackedLogExporter:
         return flush(timeout_millis, **kwargs)
 
 
-def _redact_sdk_log_text(text: str) -> str:
-    """Reduce any URL in SDK exporter diagnostics to its origin and cap length."""
-    redacted = _URL_RE.sub(lambda m: _origin(m.group(0)), text)
-    return redacted[:300]
+class _ExplicitHeaders(dict[str, str]):
+    """Prevent SDK ``headers or parse_env_headers(...)`` from rereading raw env.
+
+    A truthy empty mapping carries no wire headers and does not modify process
+    environment, which may be shared by other instrumentation.
+    """
+
+    def __bool__(self) -> bool:
+        return True
 
 
 class _BoundedExporterLogFilter(logging.Filter):
-    """Keep OTLP SDK exporter logs bounded and credential-free.
-
-    The SDK logs retry/failure details that can embed endpoint URLs (possibly
-    with userinfo credentials) and exception text. The filter drops exception
-    details, redacts URLs to origins and caps the message length; the state of
-    the export itself is already visible via :class:`ExportHealth`.
-    """
+    """Replace SDK diagnostics; arbitrary response reasons are untrusted text."""
 
     def filter(self, record: logging.LogRecord) -> bool:
         record.exc_info = None
         record.exc_text = None
         record.stack_info = None
-        try:
-            message = record.getMessage()
-        except Exception:
-            message = record.name
-        record.msg = _redact_sdk_log_text(message)
+        record.msg = "OTLP SDK export diagnostic (details withheld; see telemetry health)"
         record.args = None
         return True
 
@@ -593,6 +625,7 @@ _QUIETED_SDK_LOGGERS = False
 #: on an ancestor do *not* apply to records logged by a child logger, so the
 #: filter must be attached where the records originate.
 _OTLP_EXPORTER_LOGGER_NAMES = (
+    "opentelemetry.util.re",
     "opentelemetry.exporter.otlp",
     "opentelemetry.exporter.otlp.proto.http",
     "opentelemetry.exporter.otlp.proto.http.trace_exporter",
@@ -653,11 +686,11 @@ class TelemetrySettings:
                                               follows the master switch)
     ``OTEL_EXPORTER_OTLP_HEADERS``            shared ``k=v,k=v`` request headers
     ``OTEL_EXPORTER_OTLP_{SIGNAL}_HEADERS``   per-signal headers (merged over shared)
-    ``OTEL_EXPORTER_OTLP_TIMEOUT``            per-request timeout, ms (default 10000;
+    ``OTEL_EXPORTER_OTLP_TIMEOUT``            per-request timeout, seconds (default 10;
                                               out-of-range values use the default, so
-                                              the effective value is always 500-30000)
+                                              the effective value is always 0.5-30)
     ``OTEL_EXPORTER_OTLP_{SIGNAL}_TIMEOUT``   per-signal timeout override
-    ``OTEL_EXPORTER_OTLP_METRIC_EXPORT_INTERVAL``  metric export interval, ms
+    ``OTEL_METRIC_EXPORT_INTERVAL``  metric export interval, ms
                                               (default 5000, effectively 1000-60000)
 
     Header *values* are never logged, echoed by ``describe()``/``/v1/config``/
@@ -699,8 +732,8 @@ class TelemetrySettings:
 
     def signal_headers(self, signal: str) -> tuple[tuple[str, str], ...]:
         """Per-signal headers: signal-specific entries win over shared ones."""
-        merged = dict(self.headers)
-        merged.update(dict(getattr(self, f"{signal}_headers", ())))
+        merged = {key.lower(): value for key, value in self.headers}
+        merged.update({key.lower(): value for key, value in getattr(self, f"{signal}_headers", ())})
         return tuple(merged.items())
 
     def signal_timeout_seconds(self, signal: str) -> float:
@@ -721,9 +754,7 @@ class TelemetrySettings:
         if enabled and endpoint is None:
             endpoint = DEFAULT_OTLP_ENDPOINT
 
-        headers, rejected_headers = _parse_kv_pairs(
-            env.get("OTEL_EXPORTER_OTLP_HEADERS"), max_value_chars=1024
-        )
+        headers, rejected_headers = _parse_headers(env.get("OTEL_EXPORTER_OTLP_HEADERS"))
         resource_attributes, rejected_resource = _parse_kv_pairs(
             env.get("OTEL_RESOURCE_ATTRIBUTES"), max_value_chars=256
         )
@@ -732,7 +763,7 @@ class TelemetrySettings:
         signal_endpoints = {signal: _read(env, var) for signal, var in SIGNAL_ENDPOINT_VARS.items()}
         signal_headers: dict[str, tuple[tuple[str, str], ...]] = {}
         for signal, var in SIGNAL_HEADER_VARS.items():
-            pairs, rejected = _parse_kv_pairs(env.get(var), max_value_chars=1024)
+            pairs, rejected = _parse_headers(env.get(var))
             signal_headers[signal] = pairs
             rejected_headers += rejected
 
@@ -740,24 +771,9 @@ class TelemetrySettings:
             parsed = _parse_flag(_read(env, SIGNAL_ENABLED_VARS[signal]))
             return True if parsed is None else parsed
 
-        timeout_ms = _lenient_millis(
-            env,
-            "OTEL_EXPORTER_OTLP_TIMEOUT",
-            DEFAULT_EXPORT_TIMEOUT_MILLIS,
-            MIN_EXPORT_TIMEOUT_MILLIS,
-            MAX_EXPORT_TIMEOUT_MILLIS,
-        )
+        timeout_seconds = _lenient_seconds(env, "OTEL_EXPORTER_OTLP_TIMEOUT", 10.0)
         signal_timeouts = {
-            signal: (
-                _lenient_millis(
-                    env,
-                    var,
-                    timeout_ms,
-                    MIN_EXPORT_TIMEOUT_MILLIS,
-                    MAX_EXPORT_TIMEOUT_MILLIS,
-                )
-                / 1000.0
-            )
+            signal: _lenient_seconds(env, var, timeout_seconds)
             for signal, var in SIGNAL_TIMEOUT_VARS.items()
         }
 
@@ -805,14 +821,14 @@ class TelemetrySettings:
             logs_headers=signal_headers["logs"],
             rejected_header_entries=rejected_headers,
             rejected_resource_entries=rejected_resource,
-            export_timeout_seconds=timeout_ms / 1000.0,
+            export_timeout_seconds=timeout_seconds,
             traces_timeout_seconds=signal_timeouts["traces"],
             metrics_timeout_seconds=signal_timeouts["metrics"],
             logs_timeout_seconds=signal_timeouts["logs"],
             metric_export_interval_seconds=(
                 _lenient_millis(
                     env,
-                    "OTEL_EXPORTER_OTLP_METRIC_EXPORT_INTERVAL",
+                    "OTEL_METRIC_EXPORT_INTERVAL",
                     DEFAULT_METRIC_EXPORT_INTERVAL_MILLIS,
                     MIN_METRIC_EXPORT_INTERVAL_MILLIS,
                     MAX_METRIC_EXPORT_INTERVAL_MILLIS,
@@ -1376,8 +1392,7 @@ def setup_telemetry(settings: TelemetrySettings) -> DirectorTelemetry:
     if not settings.enabled or not settings.endpoint:
         return DirectorTelemetry(enabled=False)
 
-    parts = urlsplit(settings.endpoint)
-    if parts.scheme not in ("http", "https") or not parts.hostname:
+    if _validated_endpoint(settings.endpoint) is None:
         # The value itself is not logged: a URL can embed credentials.
         logger.warning("OTEL_EXPORTER_OTLP_ENDPOINT is not an http(s) URL; telemetry disabled")
         return DirectorTelemetry(enabled=False)
@@ -1440,7 +1455,7 @@ def setup_telemetry(settings: TelemetrySettings) -> DirectorTelemetry:
             exporter = _TrackedSpanExporter(
                 OTLPSpanExporter(
                     endpoint=endpoints["traces"],
-                    headers=dict(settings.signal_headers("traces")) or None,
+                    headers=_ExplicitHeaders(settings.signal_headers("traces")),
                     timeout=settings.signal_timeout_seconds("traces"),
                 ),
                 health,
@@ -1453,7 +1468,7 @@ def setup_telemetry(settings: TelemetrySettings) -> DirectorTelemetry:
             exporter = _TrackedMetricExporter(
                 OTLPMetricExporter(
                     endpoint=endpoints["metrics"],
-                    headers=dict(settings.signal_headers("metrics")) or None,
+                    headers=_ExplicitHeaders(settings.signal_headers("metrics")),
                     timeout=settings.signal_timeout_seconds("metrics"),
                 ),
                 health,
@@ -1475,7 +1490,7 @@ def setup_telemetry(settings: TelemetrySettings) -> DirectorTelemetry:
             exporter = _TrackedLogExporter(
                 OTLPLogExporter(
                     endpoint=endpoints["logs"],
-                    headers=dict(settings.signal_headers("logs")) or None,
+                    headers=_ExplicitHeaders(settings.signal_headers("logs")),
                     timeout=settings.signal_timeout_seconds("logs"),
                 ),
                 health,

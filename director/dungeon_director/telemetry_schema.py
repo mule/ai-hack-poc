@@ -43,6 +43,7 @@ Design rules, all covered by ``tests/test_telemetry_schema.py``:
 
 from __future__ import annotations
 
+import math
 import re
 from collections.abc import Mapping
 from dataclasses import dataclass
@@ -60,6 +61,7 @@ from pydantic import (
 )
 
 from dungeon_director.contracts import BoundedId, ExitDirection, RoomSize, RoomType
+from dungeon_director.providers import MODEL_ID_RE
 from dungeon_director.telemetry import METRIC_DIMENSIONS as DIRECTOR_METRIC_DIMENSIONS
 
 __all__ = [
@@ -72,6 +74,7 @@ __all__ = [
     "MAX_EVENTS_PER_BATCH",
     "MEASUREMENT_ONLY_KEYS",
     "SCHEMA_VERSION",
+    "TELEMETRY_SCHEMA_VERSION_ATTRIBUTE",
     "AttributeSpec",
     "AttributeType",
     "CardinalityClass",
@@ -100,19 +103,71 @@ MAX_ATTRIBUTES_PER_EVENT = 16
 #: short for a prompt, a stack trace, or a raw provider payload.
 MAX_ATTRIBUTE_STRING_LENGTH = 128
 
+#: Resource attribute name carrying :data:`SCHEMA_VERSION`. Distinct from the
+#: OTel-standard ``service.version`` resource attribute: ``service.version``
+#: is the deployable build/release version of the component (director,
+#: bridge, ...) -- ideally an actual build/release identifier when one is
+#: configured, and :data:`~dungeon_director.contracts.CONTRACT_VERSION`
+#: (the Godot<->director room-plan contract) only as a fallback when it is
+#: not. ``telemetry.schema.version`` is neither: it is *this* module's own
+#: event/attribute contract version, so a dashboard or bridge can detect a
+#: schema-incompatible producer even when the build/contract version is
+#: unchanged. See telemetry-schema.md §1/§4 for the full distinction.
+TELEMETRY_SCHEMA_VERSION_ATTRIBUTE = "telemetry.schema.version"
+
 # Same shape as dungeon_director.contracts.BoundedId / telemetry._ID_RE.
 _ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$")
 # frontier_id is game-composed as "<room_id>:<direction>" (e.g. "r-000:east"),
 # so it needs the colon BoundedId forbids; bounded to 128 chars, not 64.
 _FRONTIER_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$")
-# Same shape as dungeon_director.telemetry._LABEL_RE.
-_LABEL_RE = re.compile(r"^[A-Za-z0-9@][A-Za-z0-9_.:/@-]{0,127}$")
-# W3C Trace Context traceparent: version-traceid-spanid-flags, all lowercase hex.
-_TRACEPARENT_RE = re.compile(r"^[0-9a-f]{2}-[0-9a-f]{32}-[0-9a-f]{16}-[0-9a-f]{2}$")
+# W3C Trace Context traceparent: version-traceid-spanid-flags, all lowercase
+# hex. Shape only; _valid_traceparent() below adds the semantic checks the
+# spec requires (no all-zero trace-id/parent-id, no reserved version ff).
+_TRACEPARENT_RE = re.compile(r"^([0-9a-f]{2})-([0-9a-f]{32})-([0-9a-f]{16})-[0-9a-f]{2}$")
+_ALL_ZERO_TRACE_ID = "0" * 32
+_ALL_ZERO_PARENT_ID = "0" * 16
+_RESERVED_TRACEPARENT_VERSION = "ff"
 # Case-insensitive: credential- or bearer-token-shaped strings are never a valid attribute.
 _SECRET_LIKE_RE = re.compile(
     r"(?i)(bearer\s+\S|sk-[a-z0-9]{4,}|api[_-]?key|authorization\s*:|password\s*[:=])"
 )
+# A URI scheme separator (e.g. "https://"). Provider/model identifiers and IDs
+# never legitimately contain one; a value that does is a URL, and a URL can
+# embed credentials (https://user:pass@host/...) -- reject the shape outright
+# rather than trying to pattern-match every way a credential can appear in
+# one. This does *not* forbid a bare ':' or '/' (e.g. "typesafe/jev",
+# "@cf/meta/llama-3.1-8b-instruct" both stay valid).
+_URL_SCHEME_RE = re.compile(r"[A-Za-z][A-Za-z0-9+.-]*://")
+
+
+def _looks_unsafe(text: str) -> bool:
+    """True if ``text`` is secret-shaped or URL-shaped (see ``_SECRET_LIKE_RE`` /
+    ``_URL_SCHEME_RE``). Shared by the ``ID`` and ``STRING`` branches of
+    :func:`_validate_value`: an id's character class alone (no ``/`` or
+    scheme) doesn't stop it from *looking* like a leaked token.
+    """
+    return bool(_SECRET_LIKE_RE.search(text)) or bool(_URL_SCHEME_RE.search(text))
+
+
+def _valid_traceparent(value: str) -> bool:
+    """W3C Trace Context ``traceparent`` shape plus the spec's semantic bans.
+
+    A regex alone accepts an all-zero trace-id or parent-id, and the
+    reserved version ``ff`` -- all invalid per the spec (a real tracer never
+    emits them, and accepting them would let a bogus context silently fail
+    to correlate). Matches the reference W3C parser's rejections.
+    """
+    match = _TRACEPARENT_RE.match(value)
+    if match is None:
+        return False
+    version, trace_id, parent_id = match.group(1), match.group(2), match.group(3)
+    if version == _RESERVED_TRACEPARENT_VERSION:
+        return False
+    if trace_id == _ALL_ZERO_TRACE_ID:
+        return False
+    if parent_id == _ALL_ZERO_PARENT_ID:
+        return False
+    return True
 
 
 class GameEventName(StrEnum):
@@ -155,8 +210,8 @@ class CardinalityClass(StrEnum):
     """Whether and how an attribute may be used as a metric dimension.
 
     ``LOW``: a small, closed set of values (an enum, a bounded int, a bool,
-    or a label matched against :data:`_LABEL_RE`) -- safe as a metric
-    dimension (a label OpenLIT groups and aggregates by).
+    or a label matched against :data:`~dungeon_director.providers.MODEL_ID_RE`)
+    -- safe as a metric dimension (a label OpenLIT groups and aggregates by).
     ``CORRELATION``: an id that is unique (or near-unique) per event --
     valid on spans/logs only, rejected by :func:`assert_safe_metric_dimensions`.
     ``MEASUREMENT``: a continuous numeric observation (a duration or a
@@ -392,7 +447,15 @@ def _validate_value(spec: AttributeSpec, value: JsonValue) -> JsonValue | None:
     if spec.type is AttributeType.FLOAT:
         if isinstance(value, bool) or not isinstance(value, int | float):
             return None
-        number = float(value)
+        try:
+            # int -> float can raise OverflowError for a huge int (e.g. an
+            # attacker sending 10**1000); never let that escape sanitize().
+            number = float(value)
+        except OverflowError:
+            return None
+        if not math.isfinite(number):
+            return None  # NaN/inf: comparisons below are always False for
+            # NaN, so this check must come before the range check, not rely on it.
         if spec.minimum is not None and number < spec.minimum:
             return None
         if spec.maximum is not None and number > spec.maximum:
@@ -406,7 +469,11 @@ def _validate_value(spec: AttributeSpec, value: JsonValue) -> JsonValue | None:
         )
     if spec.type is AttributeType.ID:
         pattern = spec.pattern or _ID_RE
-        return value if isinstance(value, str) and pattern.match(value) else None
+        if not isinstance(value, str) or not pattern.match(value):
+            return None
+        # The id charset alone doesn't rule out a secret-shaped value
+        # (e.g. "sk-live-..." matches BoundedId's pattern character-for-character).
+        return None if _looks_unsafe(value) else value
     if spec.type is AttributeType.STRING:
         if not isinstance(value, str):
             return None
@@ -415,9 +482,12 @@ def _validate_value(spec: AttributeSpec, value: JsonValue) -> JsonValue | None:
             return None
         if "\n" in text or "\r" in text:
             return None
-        if _SECRET_LIKE_RE.search(text):
+        if _looks_unsafe(text):
             return None
-        if not _LABEL_RE.match(text):
+        # The director's own provider/model identifier grammar (unchanged by
+        # _looks_unsafe's ban on a URL scheme): still allows a bare '/' or ':'
+        # (e.g. "typesafe/jev", "@cf/meta/llama-3.1-8b-instruct").
+        if not MODEL_ID_RE.match(text):
             return None
         return text
     return None  # pragma: no cover - exhaustive over AttributeType
@@ -496,8 +566,11 @@ class GameEvent(BaseModel):
     @field_validator("traceparent")
     @classmethod
     def _traceparent_shape(cls, value: str | None) -> str | None:
-        if value is not None and not _TRACEPARENT_RE.match(value):
-            raise ValueError("traceparent must match the W3C traceparent format")
+        if value is not None and not _valid_traceparent(value):
+            raise ValueError(
+                "traceparent must be a valid W3C traceparent: correct shape, a "
+                "non-reserved version, and non-zero trace-id/parent-id"
+            )
         return value
 
     @model_validator(mode="after")
