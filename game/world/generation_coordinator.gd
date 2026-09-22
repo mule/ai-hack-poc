@@ -19,6 +19,8 @@ extends RefCounted
 ## Late, duplicate or stale completions are routed to the world, which is the
 ## authority and refuses them without mutating anything.
 
+const GameTelemetrySink = preload("res://world/game_telemetry_sink.gd")
+
 const DungeonContracts = preload("res://contracts/dungeon_contracts.gd")
 const DungeonWorld = preload("res://world/dungeon_world.gd")
 const RoomGenerator = preload("res://generation/room_generator.gd")
@@ -35,6 +37,8 @@ var game_state: RefCounted
 var transport: Variant
 ## Optional generation dataset recorder.
 var recorder: Variant = null
+## Optional generation lifecycle telemetry sink.
+var telemetry_sink: Variant = null
 ## Optional stable ids forwarded to the director as selectors.
 var provider := ""
 var model := ""
@@ -207,12 +211,35 @@ func _start(f: Dictionary) -> void:
 		return
 	last_generation_status = "generating"
 	var request := build_request(f, request_id)
-	in_flight[request_id] = {"key": f.key, "started": _now(), "request": request}
+	var queue_start := _now()
+	in_flight[request_id] = {"key": f.key, "started": queue_start, "request": request}
+
+	if telemetry_sink != null and telemetry_sink.has_method("enqueue_event"):
+		# generation.queued (attributes: frontier_id, depth, exit_direction)
+		var queued_attrs := {
+			"frontier_id": f.key,
+			"depth": WORLD_DEPTH,
+			"exit_direction": str(f.direction),
+		}
+		telemetry_sink.enqueue_event("generation.queued", world.run_id, request_id, queued_attrs)
+
 	var validation := DungeonContracts.validate_generation_request(request)
 	if not validation.ok:
 		var finish_info := _finish(request_id)
 		_fallback(f, request_id, "invalid_request: %s" % validation.error, request, {}, finish_info.elapsed)
 		return
+
+	# generation.sent (attributes: frontier_id, depth, exit_direction, queue_ms)
+	if telemetry_sink != null and telemetry_sink.has_method("enqueue_event"):
+		var queue_ms := float(maxi(0, _now() - queue_start))
+		var sent_attrs := {
+			"frontier_id": f.key,
+			"depth": WORLD_DEPTH,
+			"exit_direction": str(f.direction),
+			"queue_ms": queue_ms,
+		}
+		telemetry_sink.enqueue_event("generation.sent", world.run_id, request_id, sent_attrs)
+
 	var options := {"provider": provider, "model": model, "timeout_sec": timeout_msec / 1000.0}
 	transport.submit(request, options, _on_result.bind(request_id, world))
 
@@ -276,7 +303,29 @@ func _on_result(result: Dictionary, request_id: String, world: RefCounted) -> vo
 ## the world, which refuses them because the frontier is no longer pending.
 func _resolve(f: Dictionary, request_id: String, result: Dictionary, late: bool, request: Dictionary = {}, elapsed_ms: float = -1.0) -> void:
 	var interpreted := _interpret(result, request_id)
-	var resp_meta: Dictionary = interpreted.get("metadata", {})
+	var resp_meta: Dictionary = interpreted.get("metadata", {}).duplicate(true)
+	var traceparent: Variant = result.get("traceparent", null)
+	if traceparent != null and GameTelemetrySink._is_valid_traceparent(str(traceparent)):
+		resp_meta["_telemetry_traceparent"] = traceparent
+
+	# Emit generation.response_received if transport returned a response
+	if result.get("transport_ok", false) and telemetry_sink != null and telemetry_sink.has_method("enqueue_event"):
+		var prov_recv := str(resp_meta.get("provider", provider))
+		if prov_recv == "":
+			prov_recv = "unknown"
+		var mod_recv := str(resp_meta.get("model", model))
+		if mod_recv == "":
+			mod_recv = "unknown"
+		var net_ms: float = elapsed_ms
+		if net_ms < 0.0:
+			net_ms = 0.0
+		var resp_attrs := {
+			"provider": prov_recv,
+			"model": mod_recv,
+			"network_ms": net_ms,
+		}
+		telemetry_sink.enqueue_event("generation.response_received", game_state.world.run_id, request_id, resp_attrs, resp_meta.get("_telemetry_traceparent"))
+
 	if not interpreted.ok:
 		if late:
 			game_state.world.log_event("late_invalid", f.key, {"request_id": request_id, "reason": interpreted.reason})
@@ -290,6 +339,7 @@ func _resolve(f: Dictionary, request_id: String, result: Dictionary, late: bool,
 	else:
 		placed = _place_plan(f, request_id, plan, "director", resp_meta)
 	if placed.ok:
+
 		if recorder != null and not request.is_empty():
 			var room_seed := int(placed.get("room", {}).get("seed_used", game_state.world_seed))
 			recorder.record_entry(request, provider, model, "committed", "director", room_seed, plan, "", placed.get("room", {}).get("meta", {}), resp_meta)
@@ -343,6 +393,7 @@ func _place_plan(f: Dictionary, request_id: String, plan: Dictionary, source: St
 	var world: DungeonWorld = game_state.world
 	var base := plan.duplicate(true)
 	var placement_meta := meta.duplicate(true)
+	placement_meta["materialization_started_msec"] = Time.get_ticks_msec()
 	var proposed_room_id := str(base.get("room_id", "room"))
 	if world.rooms.has(proposed_room_id):
 		var unique_room_id := _unique_room_id(world, proposed_room_id, f.key, request_id)
@@ -370,6 +421,7 @@ func _place_plan(f: Dictionary, request_id: String, plan: Dictionary, source: St
 			attempt_meta["size_used"] = size
 			if size != base.get("size", size):
 				attempt_meta["repositioned"] = true
+				attempt_meta["room_size_reduced"] = true
 			if not pruned.is_empty():
 				attempt_meta["pruned_exits"] = pruned.duplicate()
 			var room := RoomGenerator.generate(candidate, room_seed)
@@ -419,12 +471,51 @@ func _fallback(
 	world.note_fallback(f.key, reason, {"request_id": request_id})
 	print("[dungeon-gen] fallback for %s: %s" % [f.key, reason])
 	game_state.log_message("Generation fell back to local rules (%s)." % reason.get_slice(":", 0))
+
+	var reject_reason := ""
+	var fallback_reason := "provider_error"
+	if reason.begins_with("plan_rejected"):
+		reject_reason = "placement_failure"
+		if reason.ends_with("depth_mismatch"):
+			reject_reason = "schema_invalid"
+		fallback_reason = "rejected_by_game"
+	elif reason.begins_with("invalid_response") or reason == "response_mismatch":
+		reject_reason = "schema_invalid"
+		fallback_reason = "schema_error"
+	elif reason.begins_with("invalid_request"):
+		fallback_reason = "schema_error"
+	elif reason == "timeout" or reason == "provider_timeout":
+		fallback_reason = "provider_timeout"
+	elif reason.begins_with("transport_failure") or reason.begins_with("http_error"):
+		fallback_reason = "transport_failure"
+	elif reason.begins_with("provider_failure"):
+		var code := reason.get_slice(":", 1)
+		if code == "provider_timeout":
+			fallback_reason = "provider_timeout"
+		elif code in ["schema_violation", "invalid_json", "empty_response", "unsupported_contract_version"]:
+			fallback_reason = "schema_error"
+		elif response_metadata.get("provider_metadata", {}).has("selection_error"):
+			fallback_reason = "selection_error"
+	var failed_provider := str(response_metadata.get("provider", provider))
+	var failed_model := str(response_metadata.get("model", model))
+	if failed_provider == "":
+		failed_provider = "unknown"
+	if failed_model == "":
+		failed_model = "unknown"
+	if reject_reason != "" and telemetry_sink != null:
+		telemetry_sink.enqueue_event("generation.rejected", world.run_id, request_id, {
+			"reject_reason": reject_reason, "provider": failed_provider, "model": failed_model,
+		}, response_metadata.get("_telemetry_traceparent"))
 	last_provider = "rules-baseline"
 	last_model = "builtin-v1"
 	last_latency_ms = elapsed_ms if elapsed_ms >= 0.0 else -1.0
 	last_provider_metadata = {"fallback_reason": reason}
 	var fallback_metadata := {
+		"_telemetry_traceparent": response_metadata.get("_telemetry_traceparent"),
 		"fallback_reason": reason,
+		"telemetry_fallback_reason": fallback_reason,
+		"failed_provider": failed_provider,
+		"failed_model": failed_model,
 		"provider": last_provider,
 		"model": last_model,
 		"latency_ms": last_latency_ms,

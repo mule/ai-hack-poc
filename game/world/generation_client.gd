@@ -18,6 +18,8 @@ extends Node
 ##   error_kind          "timeout" | "transport_failure" | "request_failed" |
 ##                       "cancelled" (config requests only)
 
+const GameTelemetrySink = preload("res://world/game_telemetry_sink.gd")
+
 const GENERATE_PATH := "/v1/generate"
 const CONFIG_PATH := "/v1/config"
 const MAX_BODY_BYTES := 1_048_576
@@ -93,7 +95,7 @@ func _url(options: Dictionary) -> String:
 	return url
 
 
-func _on_completed(result: int, response_code: int, _headers: PackedStringArray, body: PackedByteArray, http: HTTPRequest) -> void:
+func _on_completed(result: int, response_code: int, headers: PackedStringArray, body: PackedByteArray, http: HTTPRequest) -> void:
 	if not _pending.has(http):
 		return
 	var item: Dictionary = _pending[http]
@@ -105,8 +107,22 @@ func _on_completed(result: int, response_code: int, _headers: PackedStringArray,
 	elif result != HTTPRequest.RESULT_SUCCESS:
 		on_done.call(_failure("transport_failure"))
 	else:
-		on_done.call({"transport_ok": true, "error_kind": "", "http_status": response_code, "body": body.get_string_from_utf8()})
+		on_done.call({"transport_ok": true, "error_kind": "", "http_status": response_code, "body": body.get_string_from_utf8(), "traceparent": _response_traceparent(headers)})
 
 
 static func _failure(kind: String) -> Dictionary:
 	return {"transport_ok": false, "error_kind": kind, "http_status": 0, "body": ""}
+
+
+static func _response_traceparent(headers: PackedStringArray) -> Variant:
+	var found: Variant = null
+	for header in headers:
+		var colon := header.find(":")
+		if colon < 0 or header.left(colon).strip_edges().to_lower() != "traceparent":
+			continue
+		var value := header.substr(colon + 1).strip_edges()
+		# Ambiguous or invalid context must not suppress the gameplay event.
+		if found != null or not GameTelemetrySink._is_valid_traceparent(value):
+			return null
+		found = value
+	return found

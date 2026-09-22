@@ -197,7 +197,7 @@ is dropped, never raised.
 | `room_size` | enum | low | `RoomSize` values (`tiny`…`huge`) |
 | `provider` | string | low | `dungeon_director.providers.MODEL_ID_RE`-shaped (≤128 chars; allows `/`, `:`, `@` — e.g. `typesafe/jev`, `@cf/meta/llama-3.1-8b-instruct`), no secret-shaped text, no URL scheme (`scheme://…`, which is how a credential-bearing URL like `https://user:pass@host` was slipping through an earlier draft) |
 | `model` | string | low | same grammar as `provider` |
-| `normalize_reason` | enum | low | `danger_clamped\|room_type_forbidden\|exit_conflict\|exit_direction_reassigned\|secret_probability_clamped\|exit_pruned` |
+| `normalize_reason` | enum | low | `danger_clamped\|room_type_forbidden\|exit_conflict\|exit_direction_reassigned\|secret_probability_clamped\|exit_pruned\|duplicate_room_id_rewritten\|room_size_reduced` |
 | `reject_reason` | enum | low | `schema_invalid\|policy_violation\|empty_room\|duplicate_room_id\|placement_failure` |
 | `fallback_reason` | enum | low | `provider_error\|provider_timeout\|schema_error\|selection_error\|rejected_by_game\|transport_failure` |
 | `execution_mode` | enum | low | `active\|shadow\|replay` |
@@ -211,10 +211,13 @@ is dropped, never raised.
 | `time_to_visible_ms` | float | measurement | 0–3,600,000, finite — commit to reveal |
 | `time_to_entry_ms` | float | measurement | 0–3,600,000, finite — reveal (or commit) to player entry |
 
-`duplicate_room_id` and `placement_failure` are blocking failures the game
-cannot adjust its way out of, so they reject the room outright (followed by
-a fallback); `exit_pruned` is a minor adjustment the game can make while
-still accepting the room, so it normalizes instead.
+Unrecovered duplicate IDs or placement failures reject the room. A successful
+ID rewrite emits `duplicate_room_id_rewritten`; a smaller committed footprint
+emits `room_size_reduced`; removing an exit emits `exit_pruned`. When several
+corrections apply, the single reported reason prioritizes ID rewrite, exit
+pruning, then footprint reduction. Valid Director response trace context links
+response, decision, commit, door reveal, and room entry spans; malformed or
+ambiguous headers are ignored without dropping lifecycle events.
 
 Which keys each `event_name` may carry (`shadow_comparison_id`,
 `replay_id`, `execution_mode` are allowed on every event):

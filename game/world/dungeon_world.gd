@@ -61,6 +61,9 @@ var counters := {
 	"breaches": 0,
 }
 
+## Optional telemetry sink for lifecycle events (Issue #25).
+var telemetry_sink: Variant = null
+
 var _log_seq := 0
 ## outward cell -> frontier key for every open (unresolved/pending) frontier.
 var _outward_index: Dictionary = {}
@@ -119,8 +122,14 @@ func open_frontier_leading_to(pos: Vector2i) -> Dictionary:
 
 
 func room_id_at(pos: Vector2i) -> String:
-	for room_id in room_order:
-		if rooms[room_id].bounds.has_point(pos):
+	# Search most recently committed rooms first (children before parents)
+	for i in range(room_order.size() - 1, -1, -1):
+		var room_id: String = room_order[i]
+		var r: Dictionary = rooms[room_id]
+		if r.tiles.has(pos):
+			if r.tiles[pos] != GeneratedRoom.TileType.WALL:
+				return room_id
+		elif r.get("link_pos") != null and r.link_pos == pos:
 			return room_id
 	return ""
 
@@ -309,6 +318,13 @@ func open_breach(probe_for: Callable, near: Vector2i, turn: int) -> Dictionary:
 		counters.breaches += 1
 		revision += 1
 		_log("breach", key, {"room_id": room_id})
+		if telemetry_sink != null and telemetry_sink.has_method("enqueue_event"):
+			telemetry_sink.enqueue_event(
+				"frontier.discovered",
+				run_id,
+				null,
+				{"frontier_id": key, "depth": 1, "exit_direction": direction}
+			)
 		return {"ok": true, "frontier": record}
 	return {"ok": false, "reason": "no_candidate"}
 
@@ -452,6 +468,7 @@ func _check_room_shape(room: GeneratedRoom, backlink: Dictionary) -> Dictionary:
 
 ## Apply a validated placement. Only called after every check has passed.
 func _commit_room(room: GeneratedRoom, placement: Dictionary, parent_key: String, source: String, turn: int, meta: Dictionary) -> Dictionary:
+	var commit_start_msec := Time.get_ticks_msec()
 	var origin: Vector2i = placement.origin
 	var link: Variant = placement.link_pos
 	var owned: Dictionary = {}
@@ -522,8 +539,81 @@ func _commit_room(room: GeneratedRoom, placement: Dictionary, parent_key: String
 		"seed_used": room.seed_used,
 		"meta": meta.duplicate(),
 		"diagnostics": room.diagnostics.duplicate(),
+		"committed_at_msec": Time.get_ticks_msec(),
 	}
 	rooms[room.room_id] = record
 	room_order.append(room.room_id)
 	revision += 1
+
+	var commit_end_msec := Time.get_ticks_msec()
+	var materialization_ms := float(maxi(0, commit_end_msec - int(meta.get("materialization_started_msec", commit_start_msec))))
+
+	if telemetry_sink != null and telemetry_sink.has_method("enqueue_event"):
+		# 1. room.committed event
+		var room_req_id: Variant = frontiers[parent_key].request_id if parent_key != "" and frontiers.has(parent_key) else null
+		if room_req_id == null or str(room_req_id) == "":
+			room_req_id = "req-%s-init" % run_id
+		var room_type := str(meta.get("room_type", "room"))
+		var room_size := str(meta.get("size_used", "medium"))
+		var danger := int(meta.get("danger", 1))
+		var prov := str(meta.get("provider", "rules-baseline" if source == "fallback" else "director"))
+		var mod := str(meta.get("model", "builtin-v1" if source == "fallback" else "default"))
+
+		var floor_count := maxi(1, owned.values().count(GeneratedRoom.TileType.FLOOR))
+		var committed_attrs := {
+			"room_id": room.room_id,
+			"room_type": room_type,
+			"room_size": room_size,
+			"danger": danger,
+			"exit_count": mini(exits.size(), 8),
+			"has_secret": not room.secrets.is_empty() or exits.any(func(e): return e.kind == "secret"),
+			"enemy_density": snappedf(clampf(float(enemies.size()) / float(floor_count), 0.0, 1.0), 0.0001),
+			"loot_density": snappedf(clampf(float(items.size()) / float(floor_count), 0.0, 1.0), 0.0001),
+			"materialization_ms": materialization_ms,
+			"provider": prov,
+			"model": mod,
+		}
+		if parent_key != "":
+			committed_attrs["frontier_id"] = parent_key
+
+		# Placement has been validated and committed. Publish the decision stage
+		# before the commit observation so consumers see one ordered outcome.
+		if source == "director":
+			var decision := {"provider": prov, "model": mod, "room_type": room_type,
+				"room_size": room_size, "danger": danger}
+			var normalized := ""
+			if meta.get("room_id_rewritten", false):
+				normalized = "duplicate_room_id_rewritten"
+			elif not meta.get("pruned_exits", []).is_empty():
+				normalized = "exit_pruned"
+			elif meta.get("room_size_reduced", false):
+				normalized = "room_size_reduced"
+			elif meta.get("repositioned", false):
+				normalized = "exit_conflict"
+			if normalized != "":
+				decision["normalize_reason"] = normalized
+				telemetry_sink.enqueue_event("generation.normalized", run_id, room_req_id, decision, meta.get("_telemetry_traceparent"))
+			else:
+				telemetry_sink.enqueue_event("generation.accepted", run_id, room_req_id, decision, meta.get("_telemetry_traceparent"))
+		elif source == "fallback":
+			telemetry_sink.enqueue_event("generation.fallback_applied", run_id, room_req_id, {
+				"provider": meta.get("failed_provider", "unknown"),
+				"model": meta.get("failed_model", "unknown"),
+				"fallback_reason": meta.get("telemetry_fallback_reason", "rejected_by_game"),
+			}, meta.get("_telemetry_traceparent"))
+		telemetry_sink.enqueue_event("room.committed", run_id, room_req_id, committed_attrs, meta.get("_telemetry_traceparent"))
+
+		# 3. frontier.discovered for newly created unresolved exits (null request_id)
+		for exit_entry in exits:
+			var dir: String = exit_entry.direction
+			var f_key := frontier_key(room.room_id, dir)
+			var f_rec: Dictionary = frontiers.get(f_key, {})
+			if f_rec.get("status") == STATUS_UNRESOLVED:
+				telemetry_sink.enqueue_event(
+					"frontier.discovered",
+					run_id,
+					null,
+					{"frontier_id": f_key, "depth": 1, "exit_direction": dir}
+				)
+
 	return record
