@@ -1,21 +1,51 @@
 # Observability
 
-Status: **Implemented** (issue #11). OpenTelemetry traces and metrics for every
-director generation decision, plus a local OpenLIT stack to look at them.
+Status: **Implemented** (issues #11, #24, #26). OpenTelemetry traces, metrics and
+comparison logs for director decisions and provider calls, plus a local OpenLIT stack.
 
 For model latency, reliability, usage, room behavior, and matched comparisons, see
 [the model-view recipes](model-views.md) and their parameterized SQL queries.
 
 ## What is emitted
 
-Every `POST /v1/generate` produces **one span** named `director.generate` and
+Every `POST /v1/generate` produces an **active director span** named `director.generate` and
 **one count** on `director.generation.requests`, however it ends: a room, a
 provider failure, a timeout, a schema failure, a cancelled request, an unknown
 provider/model, or a FastAPI `422` that never reached the service. Nothing in
-the request/response contract changes.
+the request/response JSON contract changes. Each actual adapter invocation adds
+one `director.provider.invoke` child span, including local rules; selection
+failures have no provider child because no call occurred. Configured shadows
+produce their own `director.generate` and provider child spans.
 
 The span name is fixed on purpose. Provider, model and status are attributes,
 so the name never becomes a high-cardinality grouping key.
+
+### Provider children and correlation
+
+`director.provider.invoke` records `gen_ai.provider.name` (plus `gen_ai.system`),
+`gen_ai.operation.name`, `gen_ai.request.model`, and `gen_ai.response.model`.
+The response model reflects the provider's reported deployment when available.
+`director.provider.call_duration_ms` measures the adapter call separately from
+the parent duration; outcome, schema validity and timeout origin distinguish
+provider errors, validation failures and deadlines.
+
+Provider metadata contains only bounded, typed summaries, such as Jev confidence
+scores and safe model identifiers. Raw probability maps and credential-shaped
+strings are excluded. Usage and cost appear only when reported: an absent value
+means unknown, while an explicitly reported zero remains zero.
+
+The HTTP endpoint accepts W3C `traceparent`/`tracestate` and returns the active
+director span's `traceparent` header when tracing is available. Invalid incoming
+context is ignored. Explicit task-local parent contexts keep concurrent active,
+shadow and replay executions separate. Generation mode is
+`director.execution_mode=active|shadow|replay`; provider children carry
+`director.provider.execution_mode` with the same value.
+
+Fixed `director.shadow.execution` and `director.shadow.comparison` spans/logs
+link outcomes through `shadow_comparison_id`. `director.replay.case` groups a
+benchmark execution with its evaluation/dataset/case IDs. These IDs belong on
+spans/logs, never metric labels. See [model comparison telemetry](../docs/model-comparison-telemetry.md)
+and [provider telemetry](../director/docs/provider-telemetry.md) for details.
 
 ### Span attributes
 
@@ -31,7 +61,7 @@ so the name never becomes a high-cardinality grouping key.
 | `director.selection_error` | `unknown_provider`, `unknown_model`, `provider_unavailable`. |
 | `director.schema_valid` | `true` on success, `false` on schema/JSON/version failures, absent when unknown. |
 | `director.retry_count` | Always `0`: the director never retries. |
-| `director.is_shadow`, `director.execution_mode` | `false`/`active` or `true`/`shadow`; configured #13 fanout uses the same instrumented execution path. |
+| `director.is_shadow`, `director.execution_mode` | `false` with `active` or `replay`, or `true` with `shadow`; nested replay shadows remain `shadow`. |
 | `director.room.*` | Type, size, danger, exit count, secrets, densities of the chosen room (success only). |
 | `gen_ai.system`, `gen_ai.request.model`, `gen_ai.response.model` | For OpenLIT's GenAI views. |
 | `gen_ai.usage.input_tokens`, `.output_tokens`, `.total_tokens`, `.cost` | Only when the provider reported them. |
@@ -57,7 +87,7 @@ adds no duration sample (nothing was generated; a ~0 s point would skew the
 percentiles), and a request that failed selection adds no provider-duration
 sample.
 
-**The only metric dimensions** are `provider`, `model`, `status`, `error_code`
+**The generation metric dimensions** are `provider`, `model`, `status`, `error_code`
 and `execution_mode` (plus `token_type` = `input`/`output` on the token
 counter). Provider and model are taken from the registry, never from the query
 string, so a client cannot create new series by sending `?provider=anything`.
@@ -225,13 +255,12 @@ cost omission, shadow labelling, secret hygiene, and each fail-open path
 
 * Metric label values come from the registry, so anything an operator
   registers is a label value. That set is small and operator-controlled.
-* OTLP exporter and SDK internals log through the `opentelemetry` loggers; the
-  director cannot sanitize text those libraries emit (for example a collector
-  response body on export failure).
+* OTLP exporter diagnostics are redacted; inspect the safe telemetry health
+  endpoint for export state rather than expecting raw collector error text.
 * `director.generation.duration` measures the service call, not HTTP parsing or
   serialization.
-* Traces are rooted at the director; the game does not propagate a trace
-  context yet.
+* Cross-process parenting requires W3C context from the caller; without it, the
+  director starts a new trace and returns its context for subsequent correlation.
 
 ## Shadow evaluation (issue #13)
 
@@ -239,7 +268,7 @@ The director records every active and shadow execution through the
 `ShadowObserver` interface in `director/dungeon_director/shadow.py`; the full
 record contract is documented in `director/docs/shadow-mode.md`. OpenTelemetry
 also instruments each actual provider execution through the shared service
-pipeline, with `director.execution_mode=active` or `shadow`.
+pipeline, with `director.execution_mode=active`, `shadow`, or `replay`.
 
 Shadow record metric labels come from `ExecutionRecord.metric_labels()` and are
 bounded to role, registered provider/model, status and reason. The
