@@ -8,7 +8,11 @@ SELECT SpanAttributes['active_provider'] AS active_provider,
        countIf(SpanAttributes['schema_mismatch'] = 'true') AS schema_disagreements,
        countIf(SpanAttributes['latency_winner'] = 'active') AS active_faster,
        countIf(SpanAttributes['latency_winner'] = 'shadow') AS shadow_faster,
-       countIf(SpanAttributes['cost_winner'] = 'unknown') AS missing_cost_pairs
+       countIf(SpanAttributes['cost_winner'] = 'unknown') AS missing_cost_pairs,
+       countIf(SpanAttributes['latency_winner'] IN ('unknown', '')) AS missing_latency_pairs,
+       countIf(SpanAttributes['success_mismatch'] IN ('unknown', '')) AS unknown_success_pairs,
+       countIf(SpanAttributes['schema_mismatch'] IN ('unknown', '')) AS unknown_schema_pairs,
+       countIf(SpanAttributes['room_type_mismatch'] IN ('unknown', '')) AS unknown_room_pairs
 FROM otel_traces
 WHERE ServiceName = {service:String}
   AND ResourceAttributes['deployment.environment'] = {environment:String}

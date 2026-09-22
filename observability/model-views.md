@@ -8,10 +8,12 @@ files in `queries/`. No OpenLIT database credentials are checked in.
 
 Open **Telemetry → Traces**, select a time range, and use **Custom Attributes →
 Add** to filter on resource `service.name` (`dungeon-director` by default) and
-`deployment.environment` (`dev` by default). Use `service.version` to isolate a
-build. `telemetry.schema.version=1` identifies this event contract; the build and
-schema versions are separate. These names come from `TelemetrySettings` and can
-be overridden in the environment.
+`deployment.environment` (`dev` by default). Set `DIRECTOR_OTEL_SERVICE_VERSION=<build-or-git-sha>` before using
+`service.version` to isolate a build: its default is the contract version, shared
+by multiple builds. The game lifecycle span attribute
+`telemetry.schema.version=1` identifies the game event contract; it is not a
+common resource filter for generation spans. Resource names come from
+`TelemetrySettings` and can be overridden in the environment.
 
 To inspect a session, add span attributes `director.run_id` and optionally
 `director.request_id`. IDs belong on traces/logs, never metric labels. The bridge
