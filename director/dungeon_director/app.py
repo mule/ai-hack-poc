@@ -55,6 +55,7 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
 from dungeon_director.contracts import ErrorKind, GenerationRequest, GenerationResponse
+from dungeon_director.game_telemetry import game_telemetry_router
 from dungeon_director.registry import ProviderDescriptor, ProviderRegistry, default_registry
 from dungeon_director.service import DirectorService
 from dungeon_director.settings import DirectorSettings
@@ -164,6 +165,9 @@ def create_app(
     app = FastAPI(title="Dungeon Director", lifespan=lifespan)
     app.state.service = service
     app.state.telemetry = telemetry
+    app.include_router(
+        game_telemetry_router(telemetry, {p.id: set(p.models) for p in registry.describe()})
+    )
 
     @app.get("/health")
     def health() -> dict[str, str]:
