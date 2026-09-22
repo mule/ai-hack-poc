@@ -18,6 +18,8 @@ extends Node
 ##   error_kind          "timeout" | "transport_failure" | "request_failed" |
 ##                       "cancelled" (config requests only)
 
+const GameTelemetrySink = preload("res://world/game_telemetry_sink.gd")
+
 const GENERATE_PATH := "/v1/generate"
 const CONFIG_PATH := "/v1/config"
 const MAX_BODY_BYTES := 1_048_576
