@@ -502,7 +502,13 @@ class ShadowEvaluator:
         task.add_done_callback(lambda done, run=run: self._on_done(done, run))
 
     async def _run(self, run: _Run, request: GenerationRequest) -> None:
-        outcome = await self._runner(request, run.provider, run.model, self._timeout)
+        # Local import avoids a cycle: the observer consumes these record types.
+        from dungeon_director.comparison_telemetry import telemetry_context
+
+        with telemetry_context(
+            shadow_comparison_id=run.comparison.comparison_id, execution_mode="shadow"
+        ):
+            outcome = await self._runner(request, run.provider, run.model, self._timeout)
         status = ExecutionStatus.SUCCESS if outcome.response.success else ExecutionStatus.FAILURE
         self._emit_shadow(run, status, replace(outcome, comparison_id=run.comparison.comparison_id))
 
