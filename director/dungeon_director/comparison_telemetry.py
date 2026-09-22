@@ -18,6 +18,7 @@ if TYPE_CHECKING:
     from dungeon_director.telemetry import DirectorTelemetry
 
 _CORRELATION: ContextVar[dict[str, str] | None] = ContextVar("comparison_correlation", default=None)
+_PARENT: ContextVar[Any] = ContextVar("comparison_parent_context", default=None)
 _ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$")
 _KEYS = {
     "shadow_comparison_id",
@@ -33,8 +34,13 @@ def current_correlation() -> dict[str, str]:
     return dict(_CORRELATION.get() or {})
 
 
+def current_parent_context() -> Any:
+    """Explicit OTel parent carried task-locally, without attaching a current span."""
+    return _PARENT.get()
+
+
 @contextmanager
-def telemetry_context(**attributes: str):
+def telemetry_context(*, parent_context: Any = None, **attributes: str):
     """Task-local correlation inherited by shadow tasks, never metric labels."""
     values = current_correlation()
     for key, value in attributes.items():
@@ -43,10 +49,13 @@ def telemetry_context(**attributes: str):
         elif key in _KEYS and isinstance(value, str) and _ID.fullmatch(value):
             values[key] = value
     token = _CORRELATION.set(values)
+    parent_token = _PARENT.set(parent_context) if parent_context is not None else None
     try:
         yield values
     finally:
         _CORRELATION.reset(token)
+        if parent_token is not None:
+            _PARENT.reset(parent_token)
 
 
 def _winner(active: float | None, shadow: float | None) -> str:
@@ -127,7 +136,9 @@ class ComparisonTelemetry:
             return
         self._pending[comparison.comparison_id] = _Pending(
             min(comparison.expected, 5),
-            trace.set_span_in_context(trace.get_current_span()),
+            comparison.parent_context
+            if comparison.parent_context is not None
+            else trace.set_span_in_context(trace.get_current_span()),
             current_correlation(),
         )
         while len(self._pending) > self._max:

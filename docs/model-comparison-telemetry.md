@@ -7,8 +7,9 @@ logs to the trace that launched the shadows. Search by `shadow_comparison_id`,
 metric dimensions. The existing ShadowStore and recording artifacts retain
 canonical outcomes, including details deliberately omitted from telemetry.
 
-The comparison observer is registered by DirectorService alongside any caller
-observers. It retains at most 256 comparisons, each with at most the active result
+The app registers the comparison observer through DirectorService's
+`shadow_observers` interface; library callers can use the same interface.
+It retains at most 256 comparisons, each with at most the active result
 and four shadow results. It emits each active/shadow pair when both are available,
 regardless of completion order. Evicted work cannot recreate old state; its later
 execution status is still exported. SDK batch processors perform remote export in
@@ -57,8 +58,9 @@ Every provider/model execution gets a `director.replay.case` span with replay,
 evaluation, dataset, version and case IDs. The same canonical request and iteration
 share a case ID across providers; dataset IDs derive from canonical dataset
 content, not potentially sensitive file paths. Iterations have distinct case IDs.
-Execution context is `replay` (nested shadow calls remain `shadow`). IDs propagate
-to service/provider spans through the shared task-local telemetry context.
+Execution context is `replay` (nested shadow calls remain `shadow`). IDs and the
+explicit parent span context propagate to service/provider spans through shared
+task-local context variables, without attaching a generation span as ambient state.
 
 Each result artifact adds `telemetry_ids`, preserving the existing canonical room,
 usage, response metadata, and error fields. Filter OpenLIT by these IDs to compare

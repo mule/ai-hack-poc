@@ -345,32 +345,26 @@ async def run_replay_item(
         "director.run_id": request.run_id,
     }
     span = None
-    token = None
+    parent_context = None
     try:
         span = telemetry.tracer_provider.get_tracer(__name__).start_span(
             "director.replay.case", attributes=span_attributes
         )
-        from opentelemetry.context import attach
-
-        token = attach(trace.set_span_in_context(span))
+        parent_context = trace.set_span_in_context(span)
     except Exception:
         pass  # Telemetry failure must not change benchmark results.
     try:
         t0 = time.perf_counter()
-        with telemetry_context(execution_mode="replay"):
+        with telemetry_context(execution_mode="replay", parent_context=parent_context):
             outcome: GenerationOutcome = await service.generate(
                 request, provider=provider, model=model
             )
         elapsed_ms = round((time.perf_counter() - t0) * 1000, 3)
         try:
-            telemetry.emit_log("replay case completed", span_attributes)
+            telemetry.emit_log("replay case completed", span_attributes, parent_context)
         except Exception:
             pass
     finally:
-        if token is not None:
-            from opentelemetry.context import detach
-
-            detach(token)
         if span is not None:
             try:
                 span.end()

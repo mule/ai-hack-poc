@@ -9,6 +9,7 @@ from dungeon_director.comparison_telemetry import (
     ComparisonTelemetry,
     comparison_summary,
     current_correlation,
+    current_parent_context,
     telemetry_context,
 )
 from dungeon_director.contracts import ErrorDetail, ErrorKind, UsageStats
@@ -17,6 +18,7 @@ from dungeon_director.service import DirectorService
 from dungeon_director.settings import DirectorSettings, ShadowSettings, ShadowTarget
 from dungeon_director.shadow import ComparisonMeta, ExecutionRecord, ExecutionRole, ExecutionStatus
 from fakes import FakeProvider, make_request
+from opentelemetry import trace
 from opentelemetry.sdk._logs import LoggerProvider
 from opentelemetry.sdk._logs.export import InMemoryLogRecordExporter, SimpleLogRecordProcessor
 from shadow_fakes import GatedProvider, eventually
@@ -76,12 +78,18 @@ def records():
 def test_pairs_export_once_in_either_order_without_ids_on_metrics(harness, shadow_first):
     active, shadow = records()
     observer = ComparisonTelemetry(harness.telemetry)
-    with harness.telemetry.tracer_provider.get_tracer("test").start_as_current_span(
-        "active"
-    ) as parent:
-        observer.comparison_started(
-            ComparisonMeta("cmp-test", "req-test", "run-test", datetime.now(UTC), 2)
+    parent = harness.telemetry.tracer_provider.get_tracer("test").start_span("active")
+    observer.comparison_started(
+        ComparisonMeta(
+            "cmp-test",
+            "req-test",
+            "run-test",
+            datetime.now(UTC),
+            2,
+            parent_context=trace.set_span_in_context(parent),
         )
+    )
+    parent.end()
     for record in (shadow, active) if shadow_first else (active, shadow):
         observer.execution_finished(record)
     pairs = [s for s in harness.finished_spans() if s.name == "director.shadow.comparison"]
@@ -256,3 +264,23 @@ def test_context_rejects_free_text_and_resets_after_exception():
         assert current_correlation() == {"execution_mode": "replay"}
         raise RuntimeError
     assert current_correlation() == {}
+
+
+def test_explicit_parent_context_is_isolated_across_concurrent_tasks(harness):
+    async def scenario():
+        tracer = harness.telemetry.tracer_provider.get_tracer("test")
+
+        async def worker(name):
+            parent = tracer.start_span(name)
+            explicit = trace.set_span_in_context(parent)
+            with telemetry_context(parent_context=explicit, evaluation_id=name):
+                await asyncio.sleep(0)
+                assert current_correlation()["evaluation_id"] == name
+                assert trace.get_current_span(current_parent_context()) is parent
+                assert trace.get_current_span() is not parent
+            assert current_parent_context() is None
+            parent.end()
+
+        await asyncio.gather(worker("eval-one"), worker("eval-two"))
+
+    asyncio.run(scenario())
