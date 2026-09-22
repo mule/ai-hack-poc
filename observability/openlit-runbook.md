@@ -1,5 +1,8 @@
 # OpenLIT ingestion smoke and operator runbook
 
+See the [2026-09-22 acceptance record](validation-2026-09-22.md) for tested build,
+provider coverage, and separately recorded remote verification status.
+
 `make openlit-smoke` exercises the production director service with one offline
 `rules-baseline` generation, exports a correlated structured log, flushes OTLP,
 and queries persisted ClickHouse rows for traces, logs, a request counter, and
