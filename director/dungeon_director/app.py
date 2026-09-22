@@ -52,8 +52,11 @@ from fastapi import Depends, FastAPI, Query, Request
 from fastapi.exception_handlers import request_validation_exception_handler
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
+from opentelemetry.context import Context
+from opentelemetry.trace.propagation.tracecontext import TraceContextTextMapPropagator
 from pydantic import BaseModel
 
+from dungeon_director.comparison_telemetry import ComparisonTelemetry, telemetry_context
 from dungeon_director.contracts import ErrorKind, GenerationRequest, GenerationResponse
 from dungeon_director.game_telemetry import game_telemetry_router
 from dungeon_director.registry import ProviderDescriptor, ProviderRegistry, default_registry
@@ -122,7 +125,15 @@ def create_app(
     settings = settings if settings is not None else DirectorSettings.from_env()
     registry = registry if registry is not None else default_registry()
     telemetry = telemetry if telemetry is not None else _default_telemetry()
-    service = DirectorService(registry, settings, telemetry=telemetry)
+    observers = ()
+    if settings.shadow.enabled:
+        try:
+            observers = (
+                ComparisonTelemetry(telemetry, max_comparisons=settings.shadow.store_size),
+            )
+        except Exception as exc:
+            logger.warning("comparison telemetry setup failed (%s)", type(exc).__name__)
+    service = DirectorService(registry, settings, telemetry=telemetry, shadow_observers=observers)
     default_model = registry.select(settings.default_provider, settings.default_model).model
 
     @asynccontextmanager
@@ -224,6 +235,7 @@ def create_app(
     )
     async def generate(
         body: GenerationRequest,
+        request: Request,
         service: Annotated[DirectorService, Depends(get_service)],
         provider: Annotated[
             str | None,
@@ -236,10 +248,18 @@ def create_app(
             ),
         ] = None,
     ) -> JSONResponse:
-        outcome = await service.generate(
-            body, provider=_normalize_selector(provider), model=_normalize_selector(model)
-        )
-        headers = {COMPARISON_ID_HEADER: outcome.comparison_id} if outcome.comparison_id else None
+        parent = Context()
+        try:
+            parent = TraceContextTextMapPropagator().extract(request.headers, context=parent)
+        except Exception as exc:
+            logger.warning("trace context extraction failed (%s)", type(exc).__name__)
+        with telemetry_context(parent_context=parent):
+            outcome = await service.generate(
+                body, provider=_normalize_selector(provider), model=_normalize_selector(model)
+            )
+        headers = {COMPARISON_ID_HEADER: outcome.comparison_id} if outcome.comparison_id else {}
+        if outcome.traceparent:
+            headers["traceparent"] = outcome.traceparent
         return JSONResponse(
             status_code=outcome.status_code,
             content=outcome.response.model_dump(mode="json"),

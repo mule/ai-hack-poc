@@ -138,6 +138,7 @@ class GenerationOutcome:
     response: GenerationResponse
     status_code: int
     comparison_id: str | None = None
+    traceparent: str | None = None
 
 
 @dataclass(slots=True)
@@ -218,8 +219,13 @@ class DirectorService:
             return self._provider_telemetry.begin(
                 provider=provider,
                 model=model,
-                execution_mode="shadow" if shadow else "active",
+                execution_mode=parent.execution_mode
+                if parent is not None
+                else "shadow"
+                if shadow
+                else "active",
                 parent=parent.context if parent is not None else None,
+                correlation=parent.correlation_attributes if parent is not None else None,
             )
         except Exception as exc:
             logger.warning("provider telemetry start failed (%s)", type(exc).__name__)
@@ -262,15 +268,22 @@ class DirectorService:
 
         comparison: ShadowComparison | None = None
 
-        def start_shadows(selected_provider: str, selected_model: str) -> None:
+        def start_shadows(
+            selected_provider: str, selected_model: str, parent: GenerationObservation | None
+        ) -> None:
             nonlocal comparison
             evaluator = self.shadow
             if evaluator is None or not evaluator.enabled:
                 return
             try:
                 comparison = evaluator.begin(
-                    request, provider=selected_provider, model=selected_model
+                    request,
+                    provider=selected_provider,
+                    model=selected_model,
+                    parent_context=parent.context if parent is not None else None,
                 )
+                if parent is not None:
+                    _observe(parent.correlate, comparison.comparison_id)
             except Exception as exc:  # shadow machinery must never fail the active call
                 logger.error("shadow evaluation could not start: %s", type(exc).__name__)
 
@@ -307,7 +320,7 @@ class DirectorService:
         model: str | None,
         *,
         timeout_seconds: float,
-        on_selected: Callable[[str, str], None] | None = None,
+        on_selected: Callable[[str, str, GenerationObservation | None], None] | None = None,
         shadow: bool = False,
     ) -> GenerationOutcome:
         """Observe one execution without letting instrumentation change its outcome."""
@@ -352,6 +365,11 @@ class DirectorService:
                     provider_latency_s=context.provider_duration_s,
                     selection_failed=context.selection_failed,
                 )
+            if observation is not None:
+                try:
+                    outcome = replace(outcome, traceparent=observation.traceparent)
+                except Exception as exc:
+                    logger.warning("telemetry response context failed (%s)", type(exc).__name__)
             return outcome
         finally:
             if observation is not None:
@@ -364,7 +382,7 @@ class DirectorService:
         model: str | None,
         *,
         timeout_seconds: float,
-        on_selected: Callable[[str, str], None] | None,
+        on_selected: Callable[[str, str, GenerationObservation | None], None] | None,
         shadow: bool,
         observation: _ExecutionObservation,
     ) -> GenerationOutcome:
@@ -440,7 +458,7 @@ class DirectorService:
         observation.provider = provider_id
         observation.model = selection.model
         if on_selected is not None:
-            on_selected(provider_id, model)
+            on_selected(provider_id, model, observation.observation)
 
         provider_observation = self._begin_provider_observation(
             observation.observation, provider_id, model, shadow=shadow
@@ -500,7 +518,9 @@ class DirectorService:
                     code,
                     _PUBLIC_MESSAGES[code],
                     provider_metadata=(
-                        {"timeout_origin": "provider"} if code is ErrorKind.PROVIDER_TIMEOUT else None
+                        {"timeout_origin": "provider"}
+                        if code is ErrorKind.PROVIDER_TIMEOUT
+                        else None
                     ),
                 )
             except Exception as exc:
