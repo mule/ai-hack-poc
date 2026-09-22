@@ -244,7 +244,8 @@ def test_make_smoke_stdout_is_one_json_document():
     assert evidence["error"] == "verification_config_missing_or_invalid"
 
 
-def test_evidence_records_actual_sample_and_safe_build_resource_identity(monkeypatch):
+@pytest.mark.parametrize("service_name", ["dungeon-director", "claude-code"])
+def test_evidence_records_actual_sample_and_safe_build_resource_identity(monkeypatch, service_name):
     class Telemetry:
         enabled = True
 
@@ -257,6 +258,7 @@ def test_evidence_records_actual_sample_and_safe_build_resource_identity(monkeyp
         def describe(self):
             return {
                 "resource": {
+                    "service.name": service_name,
                     "service.version": "v2.3.4",
                     "deployment.environment": "staging",
                     "secret.extra": SECRET,
@@ -278,6 +280,7 @@ def test_evidence_records_actual_sample_and_safe_build_resource_identity(monkeyp
     assert evidence["samples"] == [
         {"request_id": "req1", "provider": "groq", "model": "actual-model-v3"}
     ]
+    assert evidence["service_name"] == service_name
     assert evidence["service_version"] == "v2.3.4"
     assert evidence["environment"] == "staging"
     assert evidence["build"] == {"revision": "a" * 40, "dirty": False}

@@ -11,11 +11,16 @@ Keep the UI and collector addresses separate. For the remote deployment:
 
 ```sh
 export OTEL_EXPORTER_OTLP_ENDPOINT=http://192.168.50.195:4318
+export OTEL_SERVICE_NAME=dungeon-director
 export DIRECTOR_OTEL_ENABLED=1
 export DIRECTOR_OTEL_TRACES_ENABLED=1
 export DIRECTOR_OTEL_METRICS_ENABLED=1
 export DIRECTOR_OTEL_LOGS_ENABLED=1
 ```
+
+Set `OTEL_SERVICE_NAME` explicitly: inherited agent/tool telemetry settings
+(such as `claude-code`) otherwise determine where smoke records appear.
+The JSON evidence reports the actual `service_name` used.
 
 The OpenLIT UI is at `http://192.168.50.195:3000`. The base collector endpoint
 appends `/v1/traces`, `/v1/metrics`, and `/v1/logs`; signal-specific endpoints
@@ -72,7 +77,7 @@ make openlit-smoke SMOKE_ARGS='--emit-only' > /tmp/openlit-smoke.json
 **Exit 2 is intentional:** status is `emitted_unverified` and
 `ingestion_verified` is false. This is not end-to-end acceptance. The JSON includes
 a fresh instance ID, start time, request IDs, actual selected provider/model,
-service version, deployment environment, Git revision, and dirty-checkout flag.
+service name/version, deployment environment, Git revision, and dirty-checkout flag.
 Only these bounded identity fields are included; arbitrary resource attributes,
 headers, and environment variables are not copied into evidence. A packaged
 checkout without Git metadata reports an unknown revision. In the authenticated OpenLIT

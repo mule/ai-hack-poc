@@ -75,9 +75,7 @@ def build_identity() -> dict[str, object]:
 class ClickHouseVerifier:
     """SELECT-only verifier. Authentication comes only from explicit environment config."""
 
-    def __init__(
-        self, env: dict[str, str], *, transport: httpx.BaseTransport | None = None
-    ):
+    def __init__(self, env: dict[str, str], *, transport: httpx.BaseTransport | None = None):
         url = env.get("OPENLIT_SMOKE_CLICKHOUSE_URL", "")
         database = env.get("OPENLIT_SMOKE_CLICKHOUSE_DATABASE", "")
         user = env.get("OPENLIT_SMOKE_CLICKHOUSE_USER", "")
@@ -187,14 +185,9 @@ async def emit(telemetry: Any, providers: list[str], instance: str) -> list[Samp
 
     registry = default_registry()
     # Explicit settings prevent ambient shadow config from making extra billable calls.
-    service = DirectorService(
-        registry, DirectorSettings(timeout_seconds=30), telemetry=telemetry
-    )
+    service = DirectorService(registry, DirectorSettings(timeout_seconds=30), telemetry=telemetry)
     tracer = telemetry.tracer_provider.get_tracer("dungeon-director-smoke")
-    fixture = (
-        Path(__file__).resolve().parents[1]
-        / "contracts/fixtures/generation_request.json"
-    )
+    fixture = Path(__file__).resolve().parents[1] / "contracts/fixtures/generation_request.json"
     payload = json.loads(fixture.read_text())
     samples = []
     try:
@@ -215,9 +208,7 @@ async def emit(telemetry: Any, providers: list[str], instance: str) -> list[Samp
                         "director.request_id": request_id,
                         "director.run_id": request.run_id,
                         "director.provider": provider,
-                        "director.status": "success"
-                        if outcome.response.success
-                        else "failed",
+                        "director.status": "success" if outcome.response.success else "failed",
                     },
                 )
             if not outcome.response.success:
@@ -271,13 +262,14 @@ def run(args: argparse.Namespace, env: dict[str, str]) -> tuple[int, dict[str, A
                 "instance_id": instance,
                 "started_ms": started_ms,
                 "build": build_identity(),
+                "service_name": evidence_label(
+                    telemetry.describe().get("resource", {}).get("service.name")
+                ),
                 "service_version": evidence_label(
                     telemetry.describe().get("resource", {}).get("service.version")
                 ),
                 "environment": evidence_label(
-                    telemetry.describe()
-                    .get("resource", {})
-                    .get("deployment.environment")
+                    telemetry.describe().get("resource", {}).get("deployment.environment")
                 ),
                 "samples": [
                     {
@@ -295,13 +287,10 @@ def run(args: argparse.Namespace, env: dict[str, str]) -> tuple[int, dict[str, A
             return 2, evidence
         counts = verify(verifier, instance, started_ms, samples, args.deadline)
         missing = {
-            request: [name for name in SIGNALS if row[name] <= 0]
-            for request, row in counts.items()
+            request: [name for name in SIGNALS if row[name] <= 0] for request, row in counts.items()
         }
         evidence["counts"] = counts
-        evidence["missing"] = {
-            request: names for request, names in missing.items() if names
-        }
+        evidence["missing"] = {request: names for request, names in missing.items() if names}
         if evidence["missing"]:
             evidence["error"] = "ingestion_missing_signals"
             return 1, evidence
@@ -327,12 +316,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--emit-only", action="store_true", help="Export evidence; exits 2, NOT a pass"
     )
-    parser.add_argument(
-        "--live", action="store_true", help="Opt in to billable provider calls"
-    )
-    parser.add_argument(
-        "--live-provider", action="append", choices=LIVE_PROVIDERS, default=[]
-    )
+    parser.add_argument("--live", action="store_true", help="Opt in to billable provider calls")
+    parser.add_argument("--live-provider", action="append", choices=LIVE_PROVIDERS, default=[])
     parser.add_argument(
         "--deadline", type=float, default=60, help="Ingestion polling seconds (1-300)"
     )
